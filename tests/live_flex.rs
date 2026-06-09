@@ -1,7 +1,7 @@
 //! Live integration test against the real IBKR Flex Web Service.
 //!
 //! This exercises the full core path — `FlexClient::fetch_statement` over the real
-//! `ReqwestTransport` (SendRequest -> poll GetStatement -> parse) against IBKR.
+//! `ReqwestTransport` (SendRequest -> poll GetStatement -> parse), then `parse_positions`.
 //!
 //! It is SKIPPED (a no-op pass) unless both `IBKR_FLEX_TOKEN` and `IBKR_FLEX_QUERY_ID`
 //! are set. Provide them via the process environment or a `.env` file in the repo root
@@ -13,7 +13,7 @@
 //! client polls between attempts).
 
 use ibkr_flex_mcp::flex::transport::ReqwestTransport;
-use ibkr_flex_mcp::flex::FlexClient;
+use ibkr_flex_mcp::flex::{parse_positions, FlexClient};
 
 fn live_credentials() -> Option<(String, String)> {
     // Allow a repo-root .env to supply the credentials, mirroring the binary.
@@ -44,15 +44,34 @@ async fn live_fetch_returns_a_real_statement() {
         .await
         .expect("live Flex fetch should succeed with valid credentials");
 
+    // Parse positions with the same library code the `flex_positions` MCP tool uses.
+    let positions = parse_positions(&statement.raw_xml).expect("positions should parse");
+
     // Captured by default; visible with `cargo test --test live_flex -- --nocapture`.
     // NOTE: positions are your real account data — only shown with --nocapture.
     println!(
-        "live Flex statement: query_id={} reference_code={} bytes={}",
+        "live Flex statement: query_id={} reference_code={} bytes={} positions={}",
         statement.query_id,
         statement.reference_code,
-        statement.raw_xml.len()
+        statement.raw_xml.len(),
+        positions.len(),
     );
-    print_positions(&statement.raw_xml);
+    let fmt = |v: Option<f64>| v.map(|x| format!("{x}")).unwrap_or_else(|| "-".to_string());
+    for p in &positions {
+        println!(
+            "  {:<10} qty={} avgPx={} markPx={} value={} {} uPnl={}",
+            p.symbol,
+            fmt(p.quantity),
+            fmt(p.cost_basis_price),
+            fmt(p.mark_price),
+            fmt(p.position_value),
+            p.currency.as_deref().unwrap_or("-"),
+            fmt(p.unrealized_pnl),
+        );
+    }
+    if positions.is_empty() {
+        println!("  (no open positions — enable the 'Open Positions' section in your Flex Query)");
+    }
 
     assert_eq!(
         statement.query_id, query_id,
@@ -67,62 +86,4 @@ async fn live_fetch_returns_a_real_statement() {
         "expected a FlexQueryResponse document, got: {}",
         &statement.raw_xml[..statement.raw_xml.len().min(200)]
     );
-}
-
-/// Extract and print the `<OpenPosition>` rows from a Flex statement. Generic over whichever
-/// attributes the query includes; falls back to listing the sections present if there are none.
-fn print_positions(xml: &str) {
-    use quick_xml::events::Event;
-    use quick_xml::reader::Reader;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let mut reader = Reader::from_str(xml);
-    let mut count = 0usize;
-    let mut sections = BTreeSet::new();
-
-    println!("open positions:");
-    loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                sections.insert(name.clone());
-                if name == "OpenPosition" {
-                    count += 1;
-                    let attrs: BTreeMap<String, String> = e
-                        .attributes()
-                        .flatten()
-                        .map(|a| {
-                            (
-                                String::from_utf8_lossy(a.key.as_ref()).into_owned(),
-                                String::from_utf8_lossy(&a.value).into_owned(),
-                            )
-                        })
-                        .collect();
-                    let g = |k: &str| attrs.get(k).map(String::as_str).unwrap_or("-");
-                    println!(
-                        "  {:<10} qty={:>14} value={:>16} {:<3} unrealizedPnl={}",
-                        g("symbol"),
-                        g("position"),
-                        g("positionValue"),
-                        g("currency"),
-                        g("fifoPnlUnrealized"),
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!("XML parse error: {e}");
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    println!("total open positions: {count}");
-    if count == 0 {
-        println!("  (no <OpenPosition> elements; sections present: {sections:?})");
-        println!(
-            "  enable the 'Open Positions' section in your Flex Query if you expected positions"
-        );
-    }
 }

@@ -5,9 +5,11 @@
 //!   2. GetStatement -> poll until ready     (host: gdcdyn.interactivebrokers.com)
 
 mod parse;
+mod positions;
 pub mod transport;
 
 pub use parse::FlexError;
+pub use positions::{parse_positions, Position};
 
 use parse::{classify_get_response, parse_send_response, GetOutcome};
 use std::time::Duration;
