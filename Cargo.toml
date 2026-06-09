@@ -1,0 +1,28 @@
+[package]
+name = "ibkr-flex-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Read-only Interactive Brokers Flex Query MCP server"
+authors = ["Michalis Kargakis <kargakis@protonmail.com>"]
+readme = "README.md"
+keywords = ["mcp", "interactive-brokers", "ibkr", "flexquery", "finance"]
+categories = ["api-bindings"]
+
+[dependencies]
+dotenvy = "0.15.7"
+quick-xml = { version = "0.37", features = ["serialize"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "query", "charset"] }
+rmcp = { version = "1.7.0", features = ["transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+wiremock = "0.6.5"
+
+[profile.release]
+strip = true
+lto = true

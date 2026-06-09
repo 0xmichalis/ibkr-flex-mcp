@@ -1,0 +1,8 @@
+#!/bin/bash
+# Installed by cargo-husky (user-hooks). Runs the same gates as CI before each commit.
+set -e
+
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --all-targets --all-features
+cargo test --all-features
