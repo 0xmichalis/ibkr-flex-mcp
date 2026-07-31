@@ -54,8 +54,10 @@ fn attrs_of(e: &BytesStart<'_>, tag: &str) -> Result<Attrs, FlexError> {
     for attr in e.attributes() {
         let attr = attr.map_err(|err| FlexError::Parse(format!("{tag} attribute: {err}")))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        // Flex statements are XML 1.0; we do not read the declaration, so assume it.
+        // 1.1 would only add a few more characters to newline normalization.
         let value = attr
-            .unescape_value()
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|err| FlexError::Parse(format!("{tag} attribute value: {err}")))?
             .into_owned();
         attrs.insert(key, value);

@@ -17,14 +17,26 @@ read-only surface, a single static binary, and an audit-once codebase.
 
 ## Install
 
-Prebuilt **static** Linux binaries are attached to each [GitHub Release](../../releases) —
-built for `x86_64-unknown-linux-musl`, so they link no libc and run on any x86_64 Linux
-regardless of the host's glibc version.
+Prebuilt binaries are attached to each [GitHub Release](../../releases):
+
+| Platform | Asset |
+| --- | --- |
+| Linux x86_64 | `ibkr-flex-mcp-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz` |
+| macOS Apple Silicon | `ibkr-flex-mcp-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `ibkr-flex-mcp-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
+
+The Linux build is **static** (musl), so it links no libc and runs on any x86_64 Linux regardless
+of the host's glibc version.
 
 ```sh
-tar xzf ibkr-flex-mcp-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz
-install ibkr-flex-mcp-vX.Y.Z-x86_64-unknown-linux-musl/ibkr-flex-mcp ~/.local/bin/
+target=x86_64-unknown-linux-musl   # or aarch64-apple-darwin, x86_64-apple-darwin
+tar xzf "ibkr-flex-mcp-vX.Y.Z-${target}.tar.gz"
+install "ibkr-flex-mcp-vX.Y.Z-${target}/ibkr-flex-mcp" ~/.local/bin/
 ```
+
+Each asset ships with a `.sha256` alongside it. On macOS the binary is unsigned, so Gatekeeper
+will quarantine a downloaded copy — clear it with
+`xattr -d com.apple.quarantine ~/.local/bin/ibkr-flex-mcp`.
 
 Or build from source: `cargo build --release` (a static musl build uses
 [`cross`](https://github.com/cross-rs/cross): `cross build --release --target x86_64-unknown-linux-musl`).

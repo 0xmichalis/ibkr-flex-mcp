@@ -1,6 +1,6 @@
 [package]
 name = "ibkr-flex-mcp"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 description = "Read-only Interactive Brokers Flex Query MCP server"
@@ -11,7 +11,7 @@ categories = ["api-bindings"]
 
 [dependencies]
 dotenvy = "0.15.7"
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "query", "charset"] }
 rmcp = { version = "1.7.0", features = ["transport-io"] }
 serde = { version = "1", features = ["derive"] }
