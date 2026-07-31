@@ -74,7 +74,7 @@ All three are read-only, and each returns only what the Flex query is configured
 ## Docs
 
 - [Configuring the Flex query](docs/FLEX_QUERY_SETUP.md) — sections, fields, period, verification.
-- [Use with a Hermes agent](docs/HERMES_AGENT_SETUP.md) — `~/.hermes/config.yaml` wiring.
+- [Use with a Hermes agent](docs/HERMES_AGENT_SETUP.md) — `~/.hermes/config.yaml` wiring, and the redeploy routine.
 
 ## License
 
