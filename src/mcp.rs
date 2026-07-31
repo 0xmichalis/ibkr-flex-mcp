@@ -7,7 +7,7 @@
 //! cannot trade.
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::flex::transport::ReqwestTransport;
@@ -113,8 +113,10 @@ impl ServerHandler for FlexServer {
 /// (`is_error = true`) so the model sees the message, rather than a protocol error.
 fn statement_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResult {
     match result {
-        Ok(statement) => CallToolResult::success(vec![Content::text(statement.raw_xml)]),
-        Err(err) => CallToolResult::error(vec![Content::text(format!("Flex query failed: {err}"))]),
+        Ok(statement) => CallToolResult::success(vec![ContentBlock::text(statement.raw_xml)]),
+        Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
+            "Flex query failed: {err}"
+        ))]),
     }
 }
 
@@ -134,19 +136,21 @@ fn trades_to_result(
     let statement = match result {
         Ok(statement) => statement,
         Err(err) => {
-            return CallToolResult::error(vec![Content::text(format!("Flex query failed: {err}"))])
+            return CallToolResult::error(vec![ContentBlock::text(format!(
+                "Flex query failed: {err}"
+            ))])
         }
     };
     match select_trades(&statement.raw_xml, filter) {
         Ok(selection) => match serde_json::to_value(&selection) {
             Ok(value) => CallToolResult::structured(value),
-            Err(err) => CallToolResult::error(vec![Content::text(format!(
+            Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "serialising trades failed: {err}"
             ))]),
         },
-        Err(err) => {
-            CallToolResult::error(vec![Content::text(format!("parsing trades failed: {err}"))])
-        }
+        Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
+            "parsing trades failed: {err}"
+        ))]),
     }
 }
 
@@ -159,12 +163,14 @@ fn rows_to_result<T: serde::Serialize>(
     let statement = match result {
         Ok(statement) => statement,
         Err(err) => {
-            return CallToolResult::error(vec![Content::text(format!("Flex query failed: {err}"))])
+            return CallToolResult::error(vec![ContentBlock::text(format!(
+                "Flex query failed: {err}"
+            ))])
         }
     };
     match parse(&statement.raw_xml) {
         Ok(rows) => CallToolResult::structured(serde_json::json!({ section: rows })),
-        Err(err) => CallToolResult::error(vec![Content::text(format!(
+        Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
             "parsing {section} failed: {err}"
         ))]),
     }
