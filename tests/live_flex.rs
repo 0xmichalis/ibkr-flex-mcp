@@ -13,7 +13,7 @@
 //! client polls between attempts).
 
 use ibkr_flex_mcp::flex::transport::ReqwestTransport;
-use ibkr_flex_mcp::flex::{parse_positions, FlexClient};
+use ibkr_flex_mcp::flex::{parse_positions, parse_trades, FlexClient};
 
 fn live_credentials() -> Option<(String, String)> {
     // Allow a repo-root .env to supply the credentials, mirroring the binary.
@@ -44,17 +44,19 @@ async fn live_fetch_returns_a_real_statement() {
         .await
         .expect("live Flex fetch should succeed with valid credentials");
 
-    // Parse positions with the same library code the `flex_positions` MCP tool uses.
+    // Parse with the same library code the `flex_positions` / `flex_trades` MCP tools use.
     let positions = parse_positions(&statement.raw_xml).expect("positions should parse");
+    let trades = parse_trades(&statement.raw_xml).expect("trades should parse");
 
     // Captured by default; visible with `cargo test --test live_flex -- --nocapture`.
     // NOTE: positions are your real account data — only shown with --nocapture.
     println!(
-        "live Flex statement: query_id={} reference_code={} bytes={} positions={}",
+        "live Flex statement: query_id={} reference_code={} bytes={} positions={} trades={}",
         statement.query_id,
         statement.reference_code,
         statement.raw_xml.len(),
         positions.len(),
+        trades.len(),
     );
     let fmt = |v: Option<f64>| v.map(|x| format!("{x}")).unwrap_or_else(|| "-".to_string());
     for p in &positions {
@@ -71,6 +73,27 @@ async fn live_fetch_returns_a_real_statement() {
     }
     if positions.is_empty() {
         println!("  (no open positions — enable the 'Open Positions' section in your Flex Query)");
+    }
+
+    for t in &trades {
+        println!(
+            "  {:<10} {} {:<4} {:<2} qty={} px={} comm={} cost={} rPnl={} [{}]",
+            t.symbol,
+            t.trade_date.as_deref().unwrap_or("-"),
+            t.buy_sell.as_deref().unwrap_or("-"),
+            t.open_close.as_deref().unwrap_or("-"),
+            fmt(t.quantity),
+            fmt(t.trade_price),
+            fmt(t.commission),
+            fmt(t.cost),
+            fmt(t.realized_pnl),
+            t.level_of_detail.as_deref().unwrap_or("-"),
+        );
+    }
+    if trades.is_empty() {
+        println!(
+            "  (no trades — enable the 'Trades' section in your Flex Query, and check its period)"
+        );
     }
 
     assert_eq!(

@@ -1,15 +1,15 @@
 //! MCP server exposing the read-only Flex Query tools over stdio (via `rmcp`).
 //!
-//! The server holds a configured token + query id and a [`FlexClient`], and exposes two
-//! read-only tools: `flex_run_query` (raw statement XML) and `flex_positions` (parsed,
-//! structured open positions). There is deliberately no order-placement tool — the Flex Web
-//! Service cannot trade.
+//! The server holds a configured token + query id and a [`FlexClient`], and exposes three
+//! read-only tools: `flex_run_query` (raw statement XML), `flex_positions` (parsed, structured
+//! open positions) and `flex_trades` (parsed, structured executions). There is deliberately no
+//! order-placement tool — the Flex Web Service cannot trade.
 
 use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::flex::transport::ReqwestTransport;
-use crate::flex::{parse_positions, FlexClient, FlexError, FlexStatement};
+use crate::flex::{parse_positions, parse_trades, FlexClient, FlexError, FlexStatement};
 
 /// The MCP server: a Flex client plus the credentials identifying which report to fetch.
 pub struct FlexServer {
@@ -60,6 +60,23 @@ impl FlexServer {
             .await;
         Ok(positions_to_result(result))
     }
+
+    #[tool(
+        name = "flex_trades",
+        description = "Fetch the configured Flex Query report and return executed trades as \
+                       structured JSON (symbol, date, buy/sell, open/close, quantity, price, \
+                       commission, cost, realized P&L) — the authoritative lot history behind \
+                       your positions' cost basis. Read-only; requires the Trades section \
+                       enabled on the query, and only covers the query's configured period.",
+        annotations(read_only_hint = true)
+    )]
+    async fn flex_trades(&self) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .client
+            .fetch_statement(&self.token, &self.query_id)
+            .await;
+        Ok(trades_to_result(result))
+    }
 }
 
 #[tool_handler]
@@ -73,7 +90,8 @@ impl ServerHandler for FlexServer {
             .with_instructions(
                 "Read-only access to Interactive Brokers account data via the Flex Web Service. \
                  `flex_run_query` returns your configured Flex Query report as raw XML; \
-                 `flex_positions` returns your open positions as structured JSON. \
+                 `flex_positions` returns your open positions as structured JSON; \
+                 `flex_trades` returns the executions behind them (lot history). \
                  This server cannot place, modify, or cancel orders.",
             )
     }
@@ -91,16 +109,30 @@ fn statement_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResu
 /// Map a Flex fetch outcome to structured open positions. Fetch and parse failures are reported
 /// as tool-level errors so the model sees the message.
 fn positions_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResult {
+    rows_to_result(result, "positions", parse_positions)
+}
+
+/// Map a Flex fetch outcome to structured trades, on the same terms as [`positions_to_result`].
+fn trades_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResult {
+    rows_to_result(result, "trades", parse_trades)
+}
+
+/// Fetch outcome -> `{ <section>: [...] }` structured content, with failures as tool-level errors.
+fn rows_to_result<T: serde::Serialize>(
+    result: Result<FlexStatement, FlexError>,
+    section: &str,
+    parse: impl Fn(&str) -> Result<Vec<T>, FlexError>,
+) -> CallToolResult {
     let statement = match result {
         Ok(statement) => statement,
         Err(err) => {
             return CallToolResult::error(vec![Content::text(format!("Flex query failed: {err}"))])
         }
     };
-    match parse_positions(&statement.raw_xml) {
-        Ok(positions) => CallToolResult::structured(serde_json::json!({ "positions": positions })),
+    match parse(&statement.raw_xml) {
+        Ok(rows) => CallToolResult::structured(serde_json::json!({ section: rows })),
         Err(err) => CallToolResult::error(vec![Content::text(format!(
-            "parsing positions failed: {err}"
+            "parsing {section} failed: {err}"
         ))]),
     }
 }
@@ -170,6 +202,38 @@ mod tests {
     #[test]
     fn fetch_error_maps_to_tool_error() {
         let result = positions_to_result(Err(FlexError::NotReady(2)));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn trades_map_to_structured_json() {
+        let xml = r#"<FlexQueryResponse><FlexStatements><FlexStatement><Trades><Trade symbol="AAPL" tradeDate="20260115" buySell="BUY" quantity="15" tradePrice="150.00" /></Trades></FlexStatement></FlexStatements></FlexQueryResponse>"#;
+
+        let result = trades_to_result(Ok(statement(xml)));
+
+        assert_ne!(result.is_error, Some(true));
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("structuredContent"), "json: {json}");
+        assert!(
+            json.contains("AAPL") && json.contains("\"quantity\":15"),
+            "json: {json}"
+        );
+    }
+
+    #[test]
+    fn no_trades_section_yields_empty_list_not_error() {
+        let xml = r#"<FlexQueryResponse><FlexStatements><FlexStatement><OpenPositions/></FlexStatement></FlexStatements></FlexQueryResponse>"#;
+
+        let result = trades_to_result(Ok(statement(xml)));
+
+        assert_ne!(result.is_error, Some(true));
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"trades\":[]"), "json: {json}");
+    }
+
+    #[test]
+    fn trades_fetch_error_maps_to_tool_error() {
+        let result = trades_to_result(Err(FlexError::NotReady(2)));
         assert_eq!(result.is_error, Some(true));
     }
 }

@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 
+use super::rows::{parse_rows, Attrs};
 use super::FlexError;
 
 /// A single open position from a Flex statement.
@@ -35,55 +36,22 @@ pub struct Position {
 
 /// Parse all `<OpenPosition>` rows from a Flex statement XML document.
 pub fn parse_positions(xml: &str) -> Result<Vec<Position>, FlexError> {
-    use quick_xml::events::Event;
-    use quick_xml::reader::Reader;
-
-    let mut reader = Reader::from_str(xml);
-    let mut positions = Vec::new();
-
-    loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"OpenPosition" => {
-                positions.push(position_from_element(&e)?);
-            }
-            Err(e) => return Err(FlexError::Parse(format!("positions XML: {e}"))),
-            _ => {}
-        }
-    }
-
-    Ok(positions)
+    parse_rows(xml, "OpenPosition", position_from)
 }
 
-fn position_from_element(e: &quick_xml::events::BytesStart<'_>) -> Result<Position, FlexError> {
-    use std::collections::HashMap;
-
-    let mut attrs: HashMap<String, String> = HashMap::new();
-    for attr in e.attributes() {
-        let attr = attr.map_err(|err| FlexError::Parse(format!("position attribute: {err}")))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let value = attr
-            .unescape_value()
-            .map_err(|err| FlexError::Parse(format!("position attribute value: {err}")))?
-            .into_owned();
-        attrs.insert(key, value);
+fn position_from(a: &Attrs) -> Position {
+    Position {
+        symbol: a.text("symbol").unwrap_or_default(),
+        description: a.text("description"),
+        asset_category: a.text("assetCategory"),
+        currency: a.text("currency"),
+        quantity: a.num("position"),
+        mark_price: a.num("markPrice"),
+        position_value: a.num("positionValue"),
+        cost_basis_price: a.num("costBasisPrice"),
+        cost_basis: a.num("costBasisMoney"),
+        unrealized_pnl: a.num("fifoPnlUnrealized"),
     }
-
-    let num = |k: &str| attrs.get(k).and_then(|v| v.parse::<f64>().ok());
-    let text = |k: &str| attrs.get(k).cloned();
-
-    Ok(Position {
-        symbol: attrs.get("symbol").cloned().unwrap_or_default(),
-        description: text("description"),
-        asset_category: text("assetCategory"),
-        currency: text("currency"),
-        quantity: num("position"),
-        mark_price: num("markPrice"),
-        position_value: num("positionValue"),
-        cost_basis_price: num("costBasisPrice"),
-        cost_basis: num("costBasisMoney"),
-        unrealized_pnl: num("fifoPnlUnrealized"),
-    })
 }
 
 #[cfg(test)]

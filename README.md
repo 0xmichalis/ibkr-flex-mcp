@@ -33,7 +33,10 @@ Or build from source: `cargo build --release` (a static musl build uses
 
 1. In IBKR Client Portal → **Settings → Account Settings → Flex Web Service**: enable it and
    generate a **token**.
-2. **Reports → Flex Queries**: create an *Activity Flex Query*, note its **Query ID**.
+2. **Reports → Flex Queries → Activity Flex Query**: create one and note its **Query ID**. The
+   query decides what the tools can see — see
+   [Configuring the Flex query](docs/FLEX_QUERY_SETUP.md) for the sections, fields and period to
+   set.
 3. Provide `IBKR_FLEX_TOKEN` and `IBKR_FLEX_QUERY_ID` to the server, either as environment
    variables or in a `.env` file in the working directory (loaded via dotenvy; real environment
    variables take precedence). A `.env` is gitignored.
@@ -44,40 +47,21 @@ Or build from source: `cargo build --release` (a static musl build uses
    IBKR_FLEX_QUERY_ID=your_flex_query_id
    ```
 
-## Use with a Hermes agent
+## Tools
 
-Point your `~/.hermes/config.yaml` at the binary. Keep secrets in `~/.hermes/.env` and reference
-them with `${VAR}` (Hermes interpolates from `~/.hermes/.env`):
+| Tool | Returns |
+| --- | --- |
+| `flex_run_query` | The configured Flex Query report as raw XML. |
+| `flex_positions` | Open positions as structured JSON (symbol, quantity, mark price, cost basis, unrealized P&L). |
+| `flex_trades` | Executions as structured JSON (date, buy/sell, open/close, quantity, price, commission, cost, realized P&L). |
 
-```yaml
-mcp_servers:
-  ibkr_flex:
-    command: /home/you/.local/bin/ibkr-flex-mcp
-    args: []
-    env:
-      IBKR_FLEX_TOKEN: "${IBKR_FLEX_TOKEN}"
-      IBKR_FLEX_QUERY_ID: "${IBKR_FLEX_QUERY_ID}"
-    timeout: 120
-    connect_timeout: 60
-```
+All three are read-only, and each returns only what the Flex query is configured to emit — see
+[Configuring the Flex query](docs/FLEX_QUERY_SETUP.md).
 
-```sh
-# ~/.hermes/.env  (chmod 600)
-IBKR_FLEX_TOKEN=your_flex_web_service_token
-IBKR_FLEX_QUERY_ID=your_flex_query_id
-```
+## Docs
 
-Verify: `hermes mcp test ibkr_flex` should connect and list the `flex_run_query` tool.
-
-### Deploying to a remote server
-
-Because the musl binary is static, deployment is just a copy — no toolchain, no Docker, no glibc
-concerns on the target:
-
-```sh
-scp ibkr-flex-mcp you@server:~/.local/bin/
-# then add the mcp_servers block above to the server's ~/.hermes/config.yaml + .env
-```
+- [Configuring the Flex query](docs/FLEX_QUERY_SETUP.md) — sections, fields, period, verification.
+- [Use with a Hermes agent](docs/HERMES_AGENT_SETUP.md) — `~/.hermes/config.yaml` wiring.
 
 ## License
 
