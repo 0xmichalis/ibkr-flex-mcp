@@ -39,7 +39,7 @@ jobs:
     # Always audit the default branch, never the dispatching ref. Auditing a
     # feature branch and then closing the rolling issue would silently declare a
     # vulnerable main clean.
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ github.event.repository.default_branch }}
         persist-credentials: false
@@ -55,7 +55,7 @@ jobs:
 
     - name: Cache cargo-audit binary
       id: cache-cargo-audit
-      uses: actions/cache@v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.tool_cache }}/cargo-audit
         key: cargo-audit-bin-${{ env.CARGO_AUDIT_VERSION }}
