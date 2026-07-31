@@ -12,7 +12,7 @@ pub mod transport;
 
 pub use parse::FlexError;
 pub use positions::{parse_positions, Position};
-pub use trades::{parse_trades, Trade};
+pub use trades::{parse_trades, select_trades, Trade, TradeFilter, TradeSelection};
 
 use parse::{classify_get_response, parse_send_response, GetOutcome};
 use std::time::Duration;

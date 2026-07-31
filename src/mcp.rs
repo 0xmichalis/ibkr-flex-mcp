@@ -2,14 +2,18 @@
 //!
 //! The server holds a configured token + query id and a [`FlexClient`], and exposes three
 //! read-only tools: `flex_run_query` (raw statement XML), `flex_positions` (parsed, structured
-//! open positions) and `flex_trades` (parsed, structured executions). There is deliberately no
-//! order-placement tool — the Flex Web Service cannot trade.
+//! open positions) and `flex_trades` (parsed, structured executions, narrowable by symbol, date
+//! and level of detail). There is deliberately no order-placement tool — the Flex Web Service
+//! cannot trade.
 
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
 use crate::flex::transport::ReqwestTransport;
-use crate::flex::{parse_positions, parse_trades, FlexClient, FlexError, FlexStatement};
+use crate::flex::{
+    parse_positions, select_trades, FlexClient, FlexError, FlexStatement, TradeFilter,
+};
 
 /// The MCP server: a Flex client plus the credentials identifying which report to fetch.
 pub struct FlexServer {
@@ -67,15 +71,23 @@ impl FlexServer {
                        structured JSON (symbol, date, buy/sell, open/close, quantity, price, \
                        commission, cost, realized P&L) — the authoritative lot history behind \
                        your positions' cost basis. Read-only; requires the Trades section \
-                       enabled on the query, and only covers the query's configured period.",
+                       enabled on the query, and only covers the query's configured period. \
+                       A full year of executions is a large response: narrow it with `symbol`, \
+                       `since`/`until` (YYYYMMDD), `level_of_detail` (use EXECUTION for \
+                       individual fills) or `limit`. The reply reports `matched` alongside \
+                       `returned`, so a `limit`-capped result is distinguishable from a \
+                       complete one.",
         annotations(read_only_hint = true)
     )]
-    async fn flex_trades(&self) -> Result<CallToolResult, ErrorData> {
+    async fn flex_trades(
+        &self,
+        Parameters(filter): Parameters<TradeFilter>,
+    ) -> Result<CallToolResult, ErrorData> {
         let result = self
             .client
             .fetch_statement(&self.token, &self.query_id)
             .await;
-        Ok(trades_to_result(result))
+        Ok(trades_to_result(result, &filter))
     }
 }
 
@@ -112,9 +124,30 @@ fn positions_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResu
     rows_to_result(result, "positions", parse_positions)
 }
 
-/// Map a Flex fetch outcome to structured trades, on the same terms as [`positions_to_result`].
-fn trades_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResult {
-    rows_to_result(result, "trades", parse_trades)
+/// Map a Flex fetch outcome to the selected trades, on the same terms as [`positions_to_result`].
+/// Unlike positions this returns an object rather than a bare list, so `matched`/`returned` can
+/// travel with the rows.
+fn trades_to_result(
+    result: Result<FlexStatement, FlexError>,
+    filter: &TradeFilter,
+) -> CallToolResult {
+    let statement = match result {
+        Ok(statement) => statement,
+        Err(err) => {
+            return CallToolResult::error(vec![Content::text(format!("Flex query failed: {err}"))])
+        }
+    };
+    match select_trades(&statement.raw_xml, filter) {
+        Ok(selection) => match serde_json::to_value(&selection) {
+            Ok(value) => CallToolResult::structured(value),
+            Err(err) => CallToolResult::error(vec![Content::text(format!(
+                "serialising trades failed: {err}"
+            ))]),
+        },
+        Err(err) => {
+            CallToolResult::error(vec![Content::text(format!("parsing trades failed: {err}"))])
+        }
+    }
 }
 
 /// Fetch outcome -> `{ <section>: [...] }` structured content, with failures as tool-level errors.
@@ -205,11 +238,14 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
     }
 
+    const TWO_TRADES: &str = r#"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+        <Trade symbol="AAPL" tradeDate="20260115" buySell="BUY" quantity="15" tradePrice="150.00" />
+        <Trade symbol="MSFT" tradeDate="20260220" buySell="BUY" quantity="7" />
+    </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"#;
+
     #[test]
     fn trades_map_to_structured_json() {
-        let xml = r#"<FlexQueryResponse><FlexStatements><FlexStatement><Trades><Trade symbol="AAPL" tradeDate="20260115" buySell="BUY" quantity="15" tradePrice="150.00" /></Trades></FlexStatement></FlexStatements></FlexQueryResponse>"#;
-
-        let result = trades_to_result(Ok(statement(xml)));
+        let result = trades_to_result(Ok(statement(TWO_TRADES)), &TradeFilter::default());
 
         assert_ne!(result.is_error, Some(true));
         let json = serde_json::to_string(&result).unwrap();
@@ -221,19 +257,38 @@ mod tests {
     }
 
     #[test]
+    fn trades_filter_narrows_the_response_and_reports_both_counts() {
+        let filter = TradeFilter {
+            symbol: Some("msft".into()),
+            ..Default::default()
+        };
+
+        let result = trades_to_result(Ok(statement(TWO_TRADES)), &filter);
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("AAPL"), "filtered symbol leaked: {json}");
+        assert!(json.contains("MSFT"), "json: {json}");
+        assert!(
+            json.contains("\"matched\":1") && json.contains("\"returned\":1"),
+            "json: {json}"
+        );
+    }
+
+    #[test]
     fn no_trades_section_yields_empty_list_not_error() {
         let xml = r#"<FlexQueryResponse><FlexStatements><FlexStatement><OpenPositions/></FlexStatement></FlexStatements></FlexQueryResponse>"#;
 
-        let result = trades_to_result(Ok(statement(xml)));
+        let result = trades_to_result(Ok(statement(xml)), &TradeFilter::default());
 
         assert_ne!(result.is_error, Some(true));
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"trades\":[]"), "json: {json}");
+        assert!(json.contains("\"matched\":0"), "json: {json}");
     }
 
     #[test]
     fn trades_fetch_error_maps_to_tool_error() {
-        let result = trades_to_result(Err(FlexError::NotReady(2)));
+        let result = trades_to_result(Err(FlexError::NotReady(2)), &TradeFilter::default());
         assert_eq!(result.is_error, Some(true));
     }
 }
