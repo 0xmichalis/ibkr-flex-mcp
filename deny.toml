@@ -1,11 +1,24 @@
 # cargo-deny configuration.
 #
-# Advisories are owned by the `cargo audit` CI job, so they are not checked here.
-# cargo-deny covers what audit cannot: license policy, banned/duplicate crates,
-# and allowed sources.
+# Advisory *scanning* is owned by the scheduled `cargo audit` workflow
+# (.github/workflows/security-audit.yml), so `cargo deny check` does not run it.
+# Advisory *exclusions* live here regardless: the audit workflow reads the
+# `[advisories] ignore` list below and passes it to `cargo audit --ignore`, so
+# there is one place to record an accepted risk.
+#
+# cargo-deny otherwise covers what audit cannot: license policy, banned/duplicate
+# crates, and allowed sources.
 
 [graph]
 all-features = true
+
+[advisories]
+# Advisories to accept, with a reason. Both forms cargo-deny accepts work:
+#   ignore = ["RUSTSEC-0000-0000"]
+#   ignore = [{ id = "RUSTSEC-0000-0000", reason = "why this is not exploitable here" }]
+# Prefer the second — an unexplained exclusion is indistinguishable from an
+# oversight six months later.
+ignore = []
 
 [licenses]
 allow = [

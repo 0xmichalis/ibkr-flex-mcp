@@ -33,7 +33,12 @@ jobs:
           # aarch64-unknown-linux-musl can be added here later (cross handles it).
 
     steps:
+    # On a tag push this is the tag; on workflow_dispatch it must be stated
+    # explicitly, or checkout would silently build the default branch and
+    # publish it under the tag's name.
     - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.tag || github.ref_name }}
 
     - name: Install Rust
       run: |
@@ -52,7 +57,9 @@ jobs:
 
     - name: Package
       run: |
-        version="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+        # The input wins: on workflow_dispatch GITHUB_REF_NAME is the branch the
+        # workflow was dispatched from ("main"), not the tag being released.
+        version="${{ github.event.inputs.tag || github.ref_name }}"
         staging="ibkr-flex-mcp-${version}-${{ matrix.target }}"
         mkdir -p "$staging"
         cp "target/${{ matrix.target }}/release/ibkr-flex-mcp" "$staging/"
