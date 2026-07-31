@@ -1,0 +1,42 @@
+# Automated dependency updates.
+#
+# Security-only updates already run without this file; what it adds is routine
+# version updates, so a dependency is not first noticed because an advisory was
+# published against it.
+#
+# Actions are pinned by commit SHA with the version in a trailing comment.
+# Dependabot understands that form and rewrites both, so pinning does not cost
+# us the updates.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    # One PR for all of them: these move together and are reviewed the same way.
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build(deps)
+    groups:
+      # Compatible updates arrive as a single PR; majors stay separate, since
+      # each one needs its own look at the changelog.
+      cargo-compatible:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
