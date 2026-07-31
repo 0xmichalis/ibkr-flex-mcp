@@ -65,6 +65,27 @@ Two gotchas when a change to the query seems not to take effect:
 - The statement echoes what it actually used — check the `<FlexStatement ... period=... fromDate=...
   toDate=...>` attributes in `flex_run_query` output before concluding a section is empty.
 
+## Keeping responses small
+
+A year of executions is a large response — for one real account, 325 trades serialise to ~140 KB,
+against ~540 KB for the raw statement XML. An MCP client with a bounded tool-output budget will
+truncate that. `flex_trades` therefore takes filters:
+
+| Parameter | Effect |
+| --- | --- |
+| `symbol` | Exact match, case-insensitive. `NHY` excludes the separately listed `NHYo`. |
+| `since` / `until` | Inclusive `YYYYMMDD` bounds on `tradeDate`. Rows with no trade date are excluded when either is set. |
+| `level_of_detail` | Usually `EXECUTION`, to drop aggregate rows. |
+| `limit` | Cap the row count, keeping the most recent. |
+
+Asking for one symbol's executions takes the same account from ~540 KB to under 4 KB.
+
+Results are ordered by trade date ascending. IBKR does **not** emit `<Trade>` rows chronologically,
+so this ordering — not statement order — is what makes `limit` mean "the most recent".
+
+The reply carries `matched` alongside `returned`: if they differ, `limit` truncated the result.
+Never read `returned` as a total.
+
 ## Reconciling positions against trades
 
 Summing `flex_trades` quantities per symbol should reproduce the `flex_positions` quantity. When it

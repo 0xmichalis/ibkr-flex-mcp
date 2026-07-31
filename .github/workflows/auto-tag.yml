@@ -139,8 +139,23 @@ jobs:
             git tag "$TAG" "$CURR_SHA"
             git push origin "$TAG"
 
+            # The tag is already pushed, so a failed dispatch cannot be fixed by
+            # re-running this workflow: the next run sees the tag and skips it.
+            # Retry, and if it still fails say exactly how to recover by hand.
             echo "Dispatching release.yml for $TAG"
-            gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --field tag="$TAG"
+            for attempt in 1 2 3; do
+              if gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --field tag="$TAG"; then
+                break
+              fi
+              if [[ $attempt == 3 ]]; then
+                echo "::error::Tag $TAG was pushed but dispatching release.yml failed." \
+                     "Re-running this workflow will NOT retry (the tag now exists)." \
+                     "Recover with: gh workflow run release.yml --repo $GITHUB_REPOSITORY --field tag=$TAG"
+                exit 1
+              fi
+              echo "Dispatch attempt $attempt failed; retrying in $((attempt * 5))s"
+              sleep $((attempt * 5))
+            done
           done
 
       - name: Summary

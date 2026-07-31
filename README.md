@@ -31,6 +31,7 @@ of the host's glibc version.
 ```sh
 target=x86_64-unknown-linux-musl   # or aarch64-apple-darwin, x86_64-apple-darwin
 tar xzf "ibkr-flex-mcp-vX.Y.Z-${target}.tar.gz"
+mkdir -p ~/.local/bin
 install "ibkr-flex-mcp-vX.Y.Z-${target}/ibkr-flex-mcp" ~/.local/bin/
 ```
 
@@ -65,7 +66,7 @@ Or build from source: `cargo build --release` (a static musl build uses
 | --- | --- |
 | `flex_run_query` | The configured Flex Query report as raw XML. |
 | `flex_positions` | Open positions as structured JSON (symbol, quantity, mark price, cost basis, unrealized P&L). |
-| `flex_trades` | Executions as structured JSON (date, buy/sell, open/close, quantity, price, commission, cost, realized P&L). |
+| `flex_trades` | Executions as structured JSON (date, buy/sell, open/close, quantity, price, commission, cost, realized P&L). Narrow with `symbol`, `since`/`until` (`YYYYMMDD`), `level_of_detail` or `limit`. |
 
 All three are read-only, and each returns only what the Flex query is configured to emit — see
 [Configuring the Flex query](docs/FLEX_QUERY_SETUP.md).

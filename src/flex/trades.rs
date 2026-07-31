@@ -9,7 +9,8 @@
 //! summary). All of them arrive as `<Trade>` rows distinguished by `levelOfDetail`, which is
 //! exposed verbatim so callers can avoid double counting.
 
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use super::rows::{parse_rows, Attrs};
 use super::FlexError;
@@ -73,9 +74,93 @@ pub struct Trade {
     pub notes: Option<String>,
 }
 
+/// Which trades to return. Every field is optional; an absent field narrows nothing.
+///
+/// A whole year of executions is a large payload, and a caller that only wants one holding's
+/// lot history should not have to receive — or truncate — the rest.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct TradeFilter {
+    /// Only trades in this symbol, matched case-insensitively and exactly. `NHY` therefore
+    /// excludes the separately listed `NHYo`.
+    pub symbol: Option<String>,
+    /// Earliest trade date to include, as `YYYYMMDD`, inclusive.
+    pub since: Option<String>,
+    /// Latest trade date to include, as `YYYYMMDD`, inclusive.
+    pub until: Option<String>,
+    /// Only rows at this level of detail, e.g. `EXECUTION`. Matched case-insensitively.
+    pub level_of_detail: Option<String>,
+    /// Return at most this many trades, keeping the most recent. `matched` still reports how
+    /// many there were, so a capped result is never mistaken for a complete one.
+    pub limit: Option<usize>,
+}
+
+/// Trades selected from a statement, plus the counts needed to detect a capped result.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct TradeSelection {
+    pub trades: Vec<Trade>,
+    /// How many trades matched the filter, before `limit`.
+    pub matched: usize,
+    /// How many are in `trades`. Less than `matched` means `limit` truncated the result.
+    pub returned: usize,
+}
+
+impl TradeFilter {
+    /// A date filter excludes rows with no `tradeDate`: absence is not proof of being in range.
+    fn matches(&self, trade: &Trade) -> bool {
+        let symbol_ok = self
+            .symbol
+            .as_ref()
+            .is_none_or(|s| trade.symbol.eq_ignore_ascii_case(s));
+        let level_ok = self.level_of_detail.as_ref().is_none_or(|want| {
+            trade
+                .level_of_detail
+                .as_ref()
+                .is_some_and(|got| got.eq_ignore_ascii_case(want))
+        });
+        let since_ok = self
+            .since
+            .as_ref()
+            .is_none_or(|s| trade.trade_date.as_ref().is_some_and(|d| d >= s));
+        let until_ok = self
+            .until
+            .as_ref()
+            .is_none_or(|u| trade.trade_date.as_ref().is_some_and(|d| d <= u));
+
+        symbol_ok && level_ok && since_ok && until_ok
+    }
+}
+
 /// Parse all `<Trade>` rows from a Flex statement XML document.
 pub fn parse_trades(xml: &str) -> Result<Vec<Trade>, FlexError> {
     parse_rows(xml, "Trade", trade_from)
+}
+
+/// Parse and narrow a statement's trades.
+///
+/// Results are ordered by trade date ascending. IBKR does *not* emit `<Trade>` rows in date
+/// order, so sorting is what makes `limit` mean "the most recent" rather than "whichever
+/// happened to be last in the file".
+pub fn select_trades(xml: &str, filter: &TradeFilter) -> Result<TradeSelection, FlexError> {
+    let mut trades: Vec<Trade> = parse_trades(xml)?
+        .into_iter()
+        .filter(|t| filter.matches(t))
+        .collect();
+
+    // Stable, so rows sharing a date keep statement order (and undated rows sort first).
+    trades.sort_by(|a, b| a.trade_date.cmp(&b.trade_date));
+
+    let matched = trades.len();
+    if let Some(limit) = filter.limit {
+        if matched > limit {
+            trades.drain(..matched - limit);
+        }
+    }
+
+    Ok(TradeSelection {
+        returned: trades.len(),
+        matched,
+        trades,
+    })
 }
 
 fn trade_from(a: &Attrs) -> Trade {
@@ -157,5 +242,94 @@ mod tests {
     fn returns_empty_when_no_trades_section() {
         let xml = r#"<FlexQueryResponse><FlexStatements count="1"><FlexStatement accountId="U1"><OpenPositions/></FlexStatement></FlexStatements></FlexQueryResponse>"#;
         assert_eq!(parse_trades(xml).unwrap(), vec![]);
+    }
+
+    /// Deliberately out of date order: IBKR does not emit trades chronologically.
+    const MIXED: &str = r#"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+        <Trade symbol="NHY" tradeDate="20260301" levelOfDetail="EXECUTION" quantity="10" />
+        <Trade symbol="NHY" tradeDate="20260101" levelOfDetail="EXECUTION" quantity="20" />
+        <Trade symbol="NHYo" tradeDate="20260201" levelOfDetail="EXECUTION" quantity="30" />
+        <Trade symbol="nhy" tradeDate="20260601" levelOfDetail="SYMBOL_SUMMARY" quantity="40" />
+        <Trade symbol="MSFT" quantity="50" />
+    </Trades></FlexStatement></FlexStatements></FlexQueryResponse>"#;
+
+    fn select(filter: TradeFilter) -> TradeSelection {
+        select_trades(MIXED, &filter).unwrap()
+    }
+
+    fn quantities(sel: &TradeSelection) -> Vec<f64> {
+        sel.trades.iter().filter_map(|t| t.quantity).collect()
+    }
+
+    #[test]
+    fn no_filter_returns_everything_sorted_by_trade_date() {
+        let sel = select(TradeFilter::default());
+        assert_eq!(sel.matched, 5);
+        assert_eq!(sel.returned, 5);
+        // The undated row sorts first, then ascending by date — not statement order.
+        assert_eq!(quantities(&sel), vec![50.0, 20.0, 30.0, 10.0, 40.0]);
+    }
+
+    #[test]
+    fn symbol_matches_case_insensitively_but_exactly() {
+        let sel = select(TradeFilter {
+            symbol: Some("nhy".into()),
+            ..Default::default()
+        });
+        // "nhy" matches "NHY" and "nhy", but never the separately listed "NHYo".
+        assert_eq!(quantities(&sel), vec![20.0, 10.0, 40.0]);
+    }
+
+    #[test]
+    fn date_bounds_are_inclusive_and_exclude_undated_rows() {
+        let sel = select(TradeFilter {
+            since: Some("20260101".into()),
+            until: Some("20260301".into()),
+            ..Default::default()
+        });
+        // MSFT has no tradeDate, so it cannot be shown to fall in range.
+        assert_eq!(quantities(&sel), vec![20.0, 30.0, 10.0]);
+    }
+
+    #[test]
+    fn level_of_detail_filters_out_aggregate_rows() {
+        let sel = select(TradeFilter {
+            level_of_detail: Some("execution".into()),
+            ..Default::default()
+        });
+        assert_eq!(quantities(&sel), vec![20.0, 30.0, 10.0]);
+    }
+
+    #[test]
+    fn limit_keeps_the_most_recent_and_reports_the_full_count() {
+        let sel = select(TradeFilter {
+            level_of_detail: Some("EXECUTION".into()),
+            limit: Some(2),
+            ..Default::default()
+        });
+        assert_eq!(quantities(&sel), vec![30.0, 10.0]); // newest two, not the last two in the file
+        assert_eq!(sel.matched, 3, "matched must reveal the truncation");
+        assert_eq!(sel.returned, 2);
+    }
+
+    #[test]
+    fn limit_larger_than_the_result_changes_nothing() {
+        let sel = select(TradeFilter {
+            limit: Some(99),
+            ..Default::default()
+        });
+        assert_eq!(sel.matched, 5);
+        assert_eq!(sel.returned, 5);
+    }
+
+    #[test]
+    fn filters_combine_and_can_match_nothing() {
+        let sel = select(TradeFilter {
+            symbol: Some("NHY".into()),
+            since: Some("20270101".into()),
+            ..Default::default()
+        });
+        assert_eq!(sel.matched, 0);
+        assert!(sel.trades.is_empty());
     }
 }

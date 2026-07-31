@@ -608,13 +608,14 @@ dependencies = [
 
 [[package]]
 name = "ibkr-flex-mcp"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "cargo-husky",
  "dotenvy",
  "quick-xml",
  "reqwest",
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",

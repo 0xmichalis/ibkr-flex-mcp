@@ -16,16 +16,24 @@ on:
         description: "Tag to build and release (e.g. v0.1.0)"
         required: true
 
+# Least privilege: only the job that publishes needs write. The build jobs run
+# dependency build scripts, so they get a read-only token and, below, a checkout
+# that does not leave it in .git/config.
 permissions:
-  contents: write # required to create the release and upload assets
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Resolved once. On workflow_dispatch github.ref_name is the branch the
+  # workflow was dispatched from ("main"), not the tag being released.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -45,17 +53,33 @@ jobs:
           # aarch64-unknown-linux-musl can be added here later (cross handles it).
 
     steps:
+    # A tag name may legally contain shell metacharacters, and it reaches several
+    # `run:` scripts below. Reject anything that is not a plain version tag before
+    # it is used, and pass it through env rather than `${{ }}` interpolation.
+    - name: Validate release tag
+      run: |
+        if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+          echo "refusing to release a tag that is not vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
+          exit 1
+        fi
+
     # On a tag push this is the tag; on workflow_dispatch it must be stated
     # explicitly, or checkout would silently build the default branch and
     # publish it under the tag's name.
+    #
+    # persist-credentials: false keeps the token out of .git/config — cargo runs
+    # dependency build scripts, which would otherwise be able to read it.
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.inputs.tag || github.ref_name }}
+        ref: ${{ env.RELEASE_TAG }}
+        persist-credentials: false
 
     - name: Install Rust
+      env:
+        TARGET: ${{ matrix.target }}
       run: |
         rustup show active-toolchain || rustup toolchain install
-        rustup target add ${{ matrix.target }}
+        rustup target add "$TARGET"
         rustup show
 
     # `cross` builds the musl target inside a container with the full toolchain
@@ -68,16 +92,19 @@ jobs:
         tool: cross
 
     - name: Build binary
-      run: ${{ matrix.builder }} build --release --locked --target ${{ matrix.target }}
+      env:
+        BUILDER: ${{ matrix.builder }}
+        TARGET: ${{ matrix.target }}
+      run: |
+        "$BUILDER" build --release --locked --target "$TARGET"
 
     - name: Package
+      env:
+        TARGET: ${{ matrix.target }}
       run: |
-        # The input wins: on workflow_dispatch GITHUB_REF_NAME is the branch the
-        # workflow was dispatched from ("main"), not the tag being released.
-        version="${{ github.event.inputs.tag || github.ref_name }}"
-        staging="ibkr-flex-mcp-${version}-${{ matrix.target }}"
+        staging="ibkr-flex-mcp-${RELEASE_TAG}-${TARGET}"
         mkdir -p "$staging"
-        cp "target/${{ matrix.target }}/release/ibkr-flex-mcp" "$staging/"
+        cp "target/${TARGET}/release/ibkr-flex-mcp" "$staging/"
         cp README.md LICENSE "$staging/"
         tar czf "${staging}.tar.gz" "$staging"
         # macOS ships shasum rather than GNU coreutils' sha256sum.
@@ -100,6 +127,8 @@ jobs:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload assets
     steps:
     - name: Download all build artifacts
       uses: actions/download-artifact@v4
@@ -110,7 +139,7 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+        tag_name: ${{ env.RELEASE_TAG }}
         draft: false
         generate_release_notes: true
         files: |
