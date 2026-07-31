@@ -31,6 +31,7 @@ of the host's glibc version.
 ```sh
 target=x86_64-unknown-linux-musl   # or aarch64-apple-darwin, x86_64-apple-darwin
 tar xzf "ibkr-flex-mcp-vX.Y.Z-${target}.tar.gz"
+mkdir -p ~/.local/bin
 install "ibkr-flex-mcp-vX.Y.Z-${target}/ibkr-flex-mcp" ~/.local/bin/
 ```
 
