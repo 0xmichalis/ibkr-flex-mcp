@@ -15,8 +15,15 @@ Activity Flex Query**.
 | --- | --- | --- |
 | **Open Positions** | `flex_positions` | Options → *Summary* is enough (*Lot* also parses; it just yields one row per lot). |
 | **Trades** | `flex_trades` | Options → tick **Executions**. *Orders* aggregates fills into one row and *Symbol Summary* collapses them further, so neither gives you true lot history. |
+| **Cash Report** | `flex_cash` | Options → tick **Currency Breakout** for one row per currency alongside the `BASE_SUMMARY` (base currency) total. Without it only the summary row arrives. |
+| **Account Information** | `flex_cash` | Names the base currency the `BASE_SUMMARY` row is stated in. |
 
 Anything else you enable is still reachable as raw XML through `flex_run_query`.
+
+Note the *Cash Report* section (balances per currency) is not *Cash Transactions* (individual
+deposits, dividends, fees); `flex_cash` reads the former. Neither section carries net
+liquidation — for a NAV cross-check enable *Change in NAV* or *Net Asset Value (NAV) in Base*
+and read it via `flex_run_query`.
 
 ## Fields
 
@@ -29,6 +36,9 @@ fields the structured tools read:
   `dateTime`, `settleDateTarget`, `levelOfDetail`, `buySell`, `openCloseIndicator`, `quantity`,
   `tradePrice`, `tradeMoney`, `proceeds`, `ibCommission`, `netCash`, `cost`, `fifoPnlRealized`,
   `exchange`, `notes`.
+- **Cash Report** — `currency`, `levelOfDetail`, `fromDate`, `toDate`, `startingCash`,
+  `endingCash`, `endingSettledCash`.
+- **Account Information** — `accountId`, `name`, `currency`.
 
 `levelOfDetail` is worth keeping: if you ever enable more than one Trades level, it is the only way
 to tell execution rows from aggregates and avoid double counting. Execution rows carry
@@ -55,8 +65,8 @@ With `IBKR_FLEX_TOKEN` and `IBKR_FLEX_QUERY_ID` in a repo-root `.env`:
 cargo test --test live_flex -- --nocapture
 ```
 
-This runs the real two-step fetch and prints one line per position and per trade, plus a summary
-(`positions=N trades=M`). It is a no-op pass when the credentials are absent.
+This runs the real two-step fetch and prints one line per position, trade and cash currency, plus
+a summary (`positions=N trades=M cash=K`). It is a no-op pass when the credentials are absent.
 
 Two gotchas when a change to the query seems not to take effect:
 

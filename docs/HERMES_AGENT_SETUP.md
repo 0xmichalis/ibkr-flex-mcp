@@ -21,8 +21,8 @@ IBKR_FLEX_TOKEN=your_flex_web_service_token
 IBKR_FLEX_QUERY_ID=your_flex_query_id
 ```
 
-Verify: `hermes mcp test ibkr_flex` should connect and list the `flex_run_query`, `flex_positions`
-and `flex_trades` tools.
+Verify: `hermes mcp test ibkr_flex` should connect and list the `flex_run_query`, `flex_positions`,
+`flex_trades` and `flex_cash` tools.
 
 ## Redeploying a new release
 
@@ -51,7 +51,7 @@ such as Claude Code. Per-session clients need nothing: they pick up the new bina
 run.
 
 ```sh
-version=v0.3.1
+version=v0.4.0
 target=x86_64-unknown-linux-musl        # or aarch64-apple-darwin, x86_64-apple-darwin
 asset="ibkr-flex-mcp-${version}-${target}.tar.gz"
 
