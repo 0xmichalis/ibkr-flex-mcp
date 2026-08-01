@@ -50,7 +50,9 @@ async fn live_fetch_returns_a_real_statement() {
     let cash = parse_cash_summary(&statement.raw_xml).expect("cash should parse");
 
     // Captured by default; visible with `cargo test --test live_flex -- --nocapture`.
-    // NOTE: positions are your real account data — only shown with --nocapture.
+    // NOTE: positions, trades and cash balances are your real account data — only shown with
+    // --nocapture. The account number is deliberately not printed: it identifies the account
+    // to anyone reading a shared terminal or CI log, and verifying the parse does not need it.
     println!(
         "live Flex statement: query_id={} reference_code={} bytes={} positions={} trades={} cash={}",
         statement.query_id,
@@ -100,8 +102,7 @@ async fn live_fetch_returns_a_real_statement() {
 
     if let Some(account) = &cash.account {
         println!(
-            "  account {} base={}",
-            account.account_id.as_deref().unwrap_or("-"),
+            "  base currency: {}",
             account.base_currency.as_deref().unwrap_or("-"),
         );
     }
