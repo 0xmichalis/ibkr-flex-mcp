@@ -4,12 +4,14 @@
 //!   1. SendRequest  -> a reference code     (host: ndcdyn.interactivebrokers.com)
 //!   2. GetStatement -> poll until ready     (host: gdcdyn.interactivebrokers.com)
 
+mod cash;
 mod parse;
 mod positions;
 mod rows;
 mod trades;
 pub mod transport;
 
+pub use cash::{parse_cash_summary, AccountInfo, CashBalance, CashSummary};
 pub use parse::FlexError;
 pub use positions::{parse_positions, Position};
 pub use trades::{parse_trades, select_trades, Trade, TradeFilter, TradeSelection};

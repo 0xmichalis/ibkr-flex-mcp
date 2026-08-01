@@ -67,8 +67,9 @@ Or build from source: `cargo build --release` (a static musl build uses
 | `flex_run_query` | The configured Flex Query report as raw XML. |
 | `flex_positions` | Open positions as structured JSON (symbol, quantity, mark price, cost basis, unrealized P&L). |
 | `flex_trades` | Executions as structured JSON (date, buy/sell, open/close, quantity, price, commission, cost, realized P&L). Narrow with `symbol`, `since`/`until` (`YYYYMMDD`), `level_of_detail` or `limit`. |
+| `flex_cash` | Cash balances as structured JSON: one row per currency plus the `BASE_SUMMARY` total in the account's base currency. |
 
-All three are read-only, and each returns only what the Flex query is configured to emit — see
+All four are read-only, and each returns only what the Flex query is configured to emit — see
 [Configuring the Flex query](docs/FLEX_QUERY_SETUP.md).
 
 ## Docs

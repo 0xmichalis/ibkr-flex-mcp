@@ -13,7 +13,7 @@
 //! client polls between attempts).
 
 use ibkr_flex_mcp::flex::transport::ReqwestTransport;
-use ibkr_flex_mcp::flex::{parse_positions, parse_trades, FlexClient};
+use ibkr_flex_mcp::flex::{parse_cash_summary, parse_positions, parse_trades, FlexClient};
 
 fn live_credentials() -> Option<(String, String)> {
     // Allow a repo-root .env to supply the credentials, mirroring the binary.
@@ -47,16 +47,18 @@ async fn live_fetch_returns_a_real_statement() {
     // Parse with the same library code the `flex_positions` / `flex_trades` MCP tools use.
     let positions = parse_positions(&statement.raw_xml).expect("positions should parse");
     let trades = parse_trades(&statement.raw_xml).expect("trades should parse");
+    let cash = parse_cash_summary(&statement.raw_xml).expect("cash should parse");
 
     // Captured by default; visible with `cargo test --test live_flex -- --nocapture`.
     // NOTE: positions are your real account data — only shown with --nocapture.
     println!(
-        "live Flex statement: query_id={} reference_code={} bytes={} positions={} trades={}",
+        "live Flex statement: query_id={} reference_code={} bytes={} positions={} trades={} cash={}",
         statement.query_id,
         statement.reference_code,
         statement.raw_xml.len(),
         positions.len(),
         trades.len(),
+        cash.cash.len(),
     );
     let fmt = |v: Option<f64>| v.map(|x| format!("{x}")).unwrap_or_else(|| "-".to_string());
     for p in &positions {
@@ -94,6 +96,27 @@ async fn live_fetch_returns_a_real_statement() {
         println!(
             "  (no trades — enable the 'Trades' section in your Flex Query, and check its period)"
         );
+    }
+
+    if let Some(account) = &cash.account {
+        println!(
+            "  account {} base={}",
+            account.account_id.as_deref().unwrap_or("-"),
+            account.base_currency.as_deref().unwrap_or("-"),
+        );
+    }
+    for c in &cash.cash {
+        println!(
+            "  {:<14} ending={} settled={} starting={} [{}]",
+            c.currency,
+            fmt(c.ending_cash),
+            fmt(c.ending_settled_cash),
+            fmt(c.starting_cash),
+            c.level_of_detail.as_deref().unwrap_or("-"),
+        );
+    }
+    if cash.cash.is_empty() {
+        println!("  (no cash rows — enable the 'Cash Report' section in your Flex Query)");
     }
 
     assert_eq!(
