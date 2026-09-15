@@ -51,7 +51,7 @@ such as Claude Code. Per-session clients need nothing: they pick up the new bina
 run.
 
 ```sh
-version=v0.4.0
+version=v0.4.1
 target=x86_64-unknown-linux-musl        # or aarch64-apple-darwin, x86_64-apple-darwin
 asset="ibkr-flex-mcp-${version}-${target}.tar.gz"
 
