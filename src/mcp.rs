@@ -223,6 +223,8 @@ fn rows_to_result<T: serde::Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn ok_statement_maps_to_success_with_raw_xml() {
@@ -375,5 +377,70 @@ mod tests {
     fn cash_fetch_error_maps_to_tool_error() {
         let result = cash_to_result(Err(FlexError::NotReady(2)));
         assert_eq!(result.is_error, Some(true));
+    }
+
+    async fn serialized_transport_error(send_url: &str, get_url: &str) -> String {
+        let client = FlexClient::new(ReqwestTransport::new().unwrap()).with_urls(send_url, get_url);
+        let result = statement_to_result(client.fetch_statement("SECRET_TOKEN", "Q1").await);
+        assert_eq!(result.is_error, Some(true));
+        serde_json::to_string(&result).unwrap()
+    }
+
+    #[tokio::test]
+    async fn serialized_status_error_redacts_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let json = serialized_transport_error(
+            &format!("{}/SendRequest", server.uri()),
+            &format!("{}/GetStatement", server.uri()),
+        )
+        .await;
+        assert!(!json.contains("SECRET_TOKEN"), "json leaked token: {json}");
+        assert!(json.contains("500"), "json missing status: {json}");
+    }
+
+    #[tokio::test]
+    async fn serialized_send_error_redacts_token() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let json = serialized_transport_error(
+            &format!("http://{}/SendRequest", addr),
+            &format!("http://{}/GetStatement", addr),
+        )
+        .await;
+        assert!(!json.contains("SECRET_TOKEN"), "json leaked token: {json}");
+        assert!(json.contains("request failed"), "json missing kind: {json}");
+    }
+
+    #[tokio::test]
+    async fn serialized_body_error_redacts_token() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+                .unwrap();
+        });
+
+        let json = serialized_transport_error(
+            &format!("http://{}/SendRequest", addr),
+            &format!("http://{}/GetStatement", addr),
+        )
+        .await;
+        assert!(!json.contains("SECRET_TOKEN"), "json leaked token: {json}");
+        assert!(
+            json.contains("reading response body"),
+            "json missing kind: {json}"
+        );
     }
 }

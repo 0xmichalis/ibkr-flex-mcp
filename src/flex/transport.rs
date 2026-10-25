@@ -51,18 +51,19 @@ impl ReqwestTransport {
 
 impl HttpGet for ReqwestTransport {
     async fn get(&self, url: &str, params: &[(&str, &str)]) -> Result<String, TransportError> {
+        // reqwest errors embed the full request URL, whose query carries the Flex token.
         let response = self
             .client
             .get(url)
             .query(params)
             .send()
             .await
-            .map_err(|e| TransportError(format!("request failed: {e}")))?
+            .map_err(|e| TransportError(format!("request failed: {}", e.without_url())))?
             .error_for_status()
-            .map_err(|e| TransportError(format!("HTTP status error: {e}")))?;
+            .map_err(|e| TransportError(format!("HTTP status error: {}", e.without_url())))?;
         response
             .text()
             .await
-            .map_err(|e| TransportError(format!("reading response body: {e}")))
+            .map_err(|e| TransportError(format!("reading response body: {}", e.without_url())))
     }
 }
