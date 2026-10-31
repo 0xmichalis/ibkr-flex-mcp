@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-binary-release.yml@bb4f2db0ec44c77fa32c4bd4a7125b432b94b21b
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-binary-release.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
     permissions:
       contents: write
     with:
