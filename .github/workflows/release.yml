@@ -16,123 +16,20 @@ on:
         description: "Tag to build and release (e.g. v0.1.0)"
         required: true
 
-# Least privilege: only the job that publishes needs write. The build jobs run
-# dependency build scripts, so they get a read-only token and, below, a checkout
-# that does not leave it in .git/config.
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  # Resolved once. On workflow_dispatch github.ref_name is the branch the
-  # workflow was dispatched from ("main"), not the tag being released.
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            builder: cross
-          # Apple Silicon: native on the arm64 runner.
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            builder: cargo
-          # Intel Macs: cross-compiled from the same arm64 runner. Apple's
-          # toolchain targets both architectures, so no container is needed.
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            builder: cargo
-          # aarch64-unknown-linux-musl can be added here later (cross handles it).
-
-    steps:
-    # A tag name may legally contain shell metacharacters, and it reaches several
-    # `run:` scripts below. Reject anything that is not a plain version tag before
-    # it is used, and pass it through env rather than `${{ }}` interpolation.
-    - name: Validate release tag
-      run: |
-        if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
-          echo "refusing to release a tag that is not vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
-          exit 1
-        fi
-
-    # On a tag push this is the tag; on workflow_dispatch it must be stated
-    # explicitly, or checkout would silently build the default branch and
-    # publish it under the tag's name.
-    #
-    # persist-credentials: false keeps the token out of .git/config — cargo runs
-    # dependency build scripts, which would otherwise be able to read it.
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        ref: ${{ env.RELEASE_TAG }}
-        persist-credentials: false
-
-    - name: Install Rust
-      env:
-        TARGET: ${{ matrix.target }}
-      run: |
-        rustup show active-toolchain || rustup toolchain install
-        rustup target add "$TARGET"
-        rustup show
-
-    # `cross` builds the musl target inside a container with the full toolchain
-    # (C compiler + cmake) that aws-lc-rs / reqwest's TLS stack needs. The Apple
-    # targets build with plain cargo against the runner's Xcode toolchain.
-    - name: Install cross
-      if: matrix.builder == 'cross'
-      uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
-      with:
-        tool: cross
-
-    - name: Build binary
-      env:
-        BUILDER: ${{ matrix.builder }}
-        TARGET: ${{ matrix.target }}
-      run: |
-        "$BUILDER" build --release --locked --target "$TARGET"
-
-    - name: Package binary and checksum
-      uses: 0xmichalis/repo-tooling/actions/package-rust-binary@ed1b0c7db2764f49a7144c7eff80351a90b65ded # v1.0.0
-      with:
-        binary: ibkr-flex-mcp
-        tag: ${{ env.RELEASE_TAG }}
-        target: ${{ matrix.target }}
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      with:
-        name: ${{ matrix.target }}
-        path: |
-          ibkr-flex-mcp-*.tar.gz
-          ibkr-flex-mcp-*.tar.gz.sha256
-        if-no-files-found: error
-
   release:
-    name: Publish Release
-    needs: build
-    runs-on: ubuntu-latest
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-binary-release.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
     permissions:
-      contents: write # create the release and upload assets
-    steps:
-    - name: Download all build artifacts
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-      with:
-        path: artifacts
-        merge-multiple: true
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-      with:
-        tag_name: ${{ env.RELEASE_TAG }}
-        draft: false
-        generate_release_notes: true
-        files: |
-          artifacts/ibkr-flex-mcp-*.tar.gz
-          artifacts/ibkr-flex-mcp-*.tar.gz.sha256
+      contents: write
+    with:
+      binary: ibkr-flex-mcp
+      tag: ${{ inputs.tag || github.ref_name }}
+      targets: |
+        [
+          {"target":"x86_64-unknown-linux-musl","os":"ubuntu-latest","builder":"cross"},
+          {"target":"aarch64-apple-darwin","os":"macos-latest","builder":"cargo"},
+          {"target":"x86_64-apple-darwin","os":"macos-latest","builder":"cargo"}
+        ]
