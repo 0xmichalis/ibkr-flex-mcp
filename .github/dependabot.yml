@@ -34,6 +34,9 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: build(deps)
+    # Dependabot writes Cargo.lock directly, bypassing Cargo's 7-day cooldown.
+    cooldown:
+      default-days: 7
     groups:
       # Compatible updates arrive as a single PR; majors stay separate, since
       # each one needs its own look at the changelog.
