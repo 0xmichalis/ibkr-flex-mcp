@@ -34,7 +34,9 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: build(deps)
-    # Dependabot writes Cargo.lock directly, bypassing Cargo's 7-day cooldown.
+    # Match the Cargo cooldown in .cargo/config.toml. Dependabot's cargo runs
+    # apply it too, security updates included, so a fix younger than 7 days
+    # needs the manual override described there.
     cooldown:
       default-days: 7
     groups:
