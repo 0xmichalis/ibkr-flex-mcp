@@ -5,8 +5,8 @@
 
 use serde::Serialize;
 
-use super::rows::{parse_rows, Attrs};
 use super::FlexError;
+use super::rows::{Attrs, parse_rows};
 
 /// A single open position from a Flex statement.
 #[derive(Debug, Clone, PartialEq, Serialize)]

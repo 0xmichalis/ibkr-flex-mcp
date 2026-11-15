@@ -67,6 +67,8 @@ fn attrs_of(e: &BytesStart<'_>, tag: &str) -> Result<Attrs, FlexError> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     #[test]
@@ -93,6 +95,6 @@ mod tests {
     #[test]
     fn malformed_xml_is_a_parse_error() {
         let err = parse_rows("<Root><Trade symbol=", "Trade", |_| ()).unwrap_err();
-        assert!(matches!(err, FlexError::Parse(_)), "got {err:?}");
+        assert_matches!(err, FlexError::Parse(_));
     }
 }

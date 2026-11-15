@@ -13,7 +13,7 @@
 //! client polls between attempts).
 
 use ibkr_flex_mcp::flex::transport::ReqwestTransport;
-use ibkr_flex_mcp::flex::{parse_cash_summary, parse_positions, parse_trades, FlexClient};
+use ibkr_flex_mcp::flex::{FlexClient, parse_cash_summary, parse_positions, parse_trades};
 
 fn live_credentials() -> Option<(String, String)> {
     // Allow a repo-root .env to supply the credentials, mirroring the binary.

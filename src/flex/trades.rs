@@ -12,8 +12,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::rows::{parse_rows, Attrs};
 use super::FlexError;
+use super::rows::{Attrs, parse_rows};
 
 /// A single trade row from a Flex statement.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -150,10 +150,10 @@ pub fn select_trades(xml: &str, filter: &TradeFilter) -> Result<TradeSelection, 
     trades.sort_by(|a, b| a.trade_date.cmp(&b.trade_date));
 
     let matched = trades.len();
-    if let Some(limit) = filter.limit {
-        if matched > limit {
-            trades.drain(..matched - limit);
-        }
+    if let Some(limit) = filter.limit
+        && matched > limit
+    {
+        trades.drain(..matched - limit);
     }
 
     Ok(TradeSelection {

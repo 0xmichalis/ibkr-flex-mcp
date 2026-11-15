@@ -61,7 +61,7 @@ pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
                 "SendRequest status {other}: {} - {}",
                 resp.error_code.unwrap_or_default(),
                 resp.error_message.unwrap_or_default()
-            )))
+            )));
         }
         None => return Err(FlexError::Parse("missing Status element".into())),
     }
@@ -81,15 +81,14 @@ pub fn classify_get_response(body: &str) -> Result<GetOutcome, FlexError> {
     }
 
     // A control envelope carrying an error code (e.g. expired token, invalid reference code).
-    if let Ok(resp) = quick_xml::de::from_str::<ControlResponse>(body) {
-        if resp.status.as_deref() != Some("Success") {
-            if let Some(code) = resp.error_code {
-                return Err(FlexError::Api(format!(
-                    "GetStatement error {code}: {}",
-                    resp.error_message.unwrap_or_default()
-                )));
-            }
-        }
+    if let Ok(resp) = quick_xml::de::from_str::<ControlResponse>(body)
+        && resp.status.as_deref() != Some("Success")
+        && let Some(code) = resp.error_code
+    {
+        return Err(FlexError::Api(format!(
+            "GetStatement error {code}: {}",
+            resp.error_message.unwrap_or_default()
+        )));
     }
 
     Ok(GetOutcome::Statement(body.to_string()))
@@ -97,6 +96,8 @@ pub fn classify_get_response(body: &str) -> Result<GetOutcome, FlexError> {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::*;
 
     const SEND_SUCCESS: &str = r#"<FlexStatementResponse timestamp="2026-06-09"><Status>Success</Status><ReferenceCode>REF123</ReferenceCode><Url>https://gdcdyn.interactivebrokers.com/x/GetStatement</Url></FlexStatementResponse>"#;
@@ -110,7 +111,7 @@ mod tests {
     fn send_failure_surfaces_api_error() {
         let xml = r#"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1012</ErrorCode><ErrorMessage>Token has expired</ErrorMessage></FlexStatementResponse>"#;
         let err = parse_send_response(xml).unwrap_err();
-        assert!(matches!(err, FlexError::Api(_)), "got {err:?}");
+        assert_matches!(err, FlexError::Api(_));
         assert!(err.to_string().contains("1012"));
         assert!(err.to_string().contains("Token has expired"));
     }
@@ -118,10 +119,7 @@ mod tests {
     #[test]
     fn send_success_without_reference_code_is_parse_error() {
         let xml = r#"<FlexStatementResponse><Status>Success</Status></FlexStatementResponse>"#;
-        assert!(matches!(
-            parse_send_response(xml).unwrap_err(),
-            FlexError::Parse(_)
-        ));
+        assert_matches!(parse_send_response(xml).unwrap_err(), FlexError::Parse(_));
     }
 
     #[test]
@@ -143,7 +141,7 @@ mod tests {
     fn get_error_envelope_surfaces_api_error() {
         let xml = r#"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1003</ErrorCode><ErrorMessage>Statement could not be generated</ErrorMessage></FlexStatementResponse>"#;
         let err = classify_get_response(xml).unwrap_err();
-        assert!(matches!(err, FlexError::Api(_)), "got {err:?}");
+        assert_matches!(err, FlexError::Api(_));
         assert!(err.to_string().contains("1003"));
     }
 }

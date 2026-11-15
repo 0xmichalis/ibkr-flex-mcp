@@ -8,12 +8,12 @@
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
-use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
+use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::flex::transport::ReqwestTransport;
 use crate::flex::{
-    parse_cash_summary, parse_positions, select_trades, FlexClient, FlexError, FlexStatement,
-    TradeFilter,
+    FlexClient, FlexError, FlexStatement, TradeFilter, parse_cash_summary, parse_positions,
+    select_trades,
 };
 
 /// The MCP server: a Flex client plus the credentials identifying which report to fetch.
@@ -158,7 +158,7 @@ fn trades_to_result(
         Err(err) => {
             return CallToolResult::error(vec![ContentBlock::text(format!(
                 "Flex query failed: {err}"
-            ))])
+            ))]);
         }
     };
     match select_trades(&statement.raw_xml, filter) {
@@ -182,7 +182,7 @@ fn cash_to_result(result: Result<FlexStatement, FlexError>) -> CallToolResult {
         Err(err) => {
             return CallToolResult::error(vec![ContentBlock::text(format!(
                 "Flex query failed: {err}"
-            ))])
+            ))]);
         }
     };
     match parse_cash_summary(&statement.raw_xml) {
@@ -209,7 +209,7 @@ fn rows_to_result<T: serde::Serialize>(
         Err(err) => {
             return CallToolResult::error(vec![ContentBlock::text(format!(
                 "Flex query failed: {err}"
-            ))])
+            ))]);
         }
     };
     match parse(&statement.raw_xml) {
