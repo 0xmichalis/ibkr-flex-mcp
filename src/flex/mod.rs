@@ -11,12 +11,12 @@ mod rows;
 mod trades;
 pub mod transport;
 
-pub use cash::{parse_cash_summary, AccountInfo, CashBalance, CashSummary};
+pub use cash::{AccountInfo, CashBalance, CashSummary, parse_cash_summary};
 pub use parse::FlexError;
-pub use positions::{parse_positions, Position};
-pub use trades::{parse_trades, select_trades, Trade, TradeFilter, TradeSelection};
+pub use positions::{Position, parse_positions};
+pub use trades::{Trade, TradeFilter, TradeSelection, parse_trades, select_trades};
 
-use parse::{classify_get_response, parse_send_response, GetOutcome};
+use parse::{GetOutcome, classify_get_response, parse_send_response};
 use std::time::Duration;
 use transport::HttpGet;
 
@@ -90,7 +90,7 @@ impl<T: HttpGet> FlexClient<T> {
                         query_id: query_id.to_string(),
                         reference_code,
                         raw_xml,
-                    })
+                    });
                 }
                 GetOutcome::InProgress => continue,
             }

@@ -5,11 +5,11 @@
 //!   IBKR_FLEX_TOKEN     — Flex Web Service token (Client Portal → Settings → Flex Web Service)
 //!   IBKR_FLEX_QUERY_ID  — the Flex Query id to run (Reports → Flex Queries)
 
-use ibkr_flex_mcp::flex::transport::ReqwestTransport;
 use ibkr_flex_mcp::flex::FlexClient;
+use ibkr_flex_mcp::flex::transport::ReqwestTransport;
 use ibkr_flex_mcp::mcp::FlexServer;
-use rmcp::transport::stdio;
 use rmcp::ServiceExt;
+use rmcp::transport::stdio;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

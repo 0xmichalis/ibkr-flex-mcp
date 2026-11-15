@@ -61,7 +61,7 @@ pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
                 "SendRequest status {other}: {} - {}",
                 resp.error_code.unwrap_or_default(),
                 resp.error_message.unwrap_or_default()
-            )))
+            )));
         }
         None => return Err(FlexError::Parse("missing Status element".into())),
     }
@@ -81,15 +81,14 @@ pub fn classify_get_response(body: &str) -> Result<GetOutcome, FlexError> {
     }
 
     // A control envelope carrying an error code (e.g. expired token, invalid reference code).
-    if let Ok(resp) = quick_xml::de::from_str::<ControlResponse>(body) {
-        if resp.status.as_deref() != Some("Success") {
-            if let Some(code) = resp.error_code {
-                return Err(FlexError::Api(format!(
-                    "GetStatement error {code}: {}",
-                    resp.error_message.unwrap_or_default()
-                )));
-            }
-        }
+    if let Ok(resp) = quick_xml::de::from_str::<ControlResponse>(body)
+        && resp.status.as_deref() != Some("Success")
+        && let Some(code) = resp.error_code
+    {
+        return Err(FlexError::Api(format!(
+            "GetStatement error {code}: {}",
+            resp.error_message.unwrap_or_default()
+        )));
     }
 
     Ok(GetOutcome::Statement(body.to_string()))
