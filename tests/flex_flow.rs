@@ -46,13 +46,13 @@ impl HttpGet for FakeTransport {
 }
 
 const SEND_OK: &str = r#"<FlexStatementResponse><Status>Success</Status><ReferenceCode>REF123</ReferenceCode></FlexStatementResponse>"#;
-const IN_PROGRESS: &str = r#"<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode><ErrorMessage>Statement generation in progress.</ErrorMessage></FlexStatementResponse>"#;
+const IN_PROGRESS: &str = r#"<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>"#;
 const STATEMENT: &str = r#"<FlexQueryResponse queryName="Activity" type="AF"><FlexStatements count="1"><FlexStatement accountId="U1234567"><OpenPositions/></FlexStatement></FlexStatements></FlexQueryResponse>"#;
 
 #[tokio::test]
 async fn fetches_statement_after_polling_through_in_progress() {
     let transport = FakeTransport::new([SEND_OK, IN_PROGRESS, STATEMENT]);
-    let client = FlexClient::new(transport).with_retry(5, Duration::ZERO);
+    let client = FlexClient::new(transport).with_retry(2, Duration::ZERO);
 
     let statement = client
         .fetch_statement("my-token", "Q789")
@@ -88,8 +88,8 @@ async fn sends_flex_protocol_params_to_correct_endpoints() {
 
 #[tokio::test]
 async fn gives_up_after_max_retries_when_never_ready() {
-    let transport = FakeTransport::new([SEND_OK, IN_PROGRESS, IN_PROGRESS, IN_PROGRESS]);
-    let client = FlexClient::new(transport).with_retry(3, Duration::ZERO);
+    let transport = FakeTransport::new([SEND_OK, IN_PROGRESS, IN_PROGRESS, IN_PROGRESS, STATEMENT]);
+    let client = FlexClient::new(&transport).with_retry(3, Duration::ZERO);
 
     let err = client
         .fetch_statement("my-token", "Q789")
@@ -97,4 +97,38 @@ async fn gives_up_after_max_retries_when_never_ready() {
         .expect_err("should not be ready");
 
     assert_eq!(err, FlexError::NotReady(3));
+    assert_eq!(transport.calls().len(), 4);
+}
+
+#[tokio::test]
+async fn rejects_second_root_in_poll_response_without_retrying() {
+    let malformed = concat!(
+        "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>",
+        "<!-- trailing metadata --><Unexpected/>",
+    );
+    let transport = FakeTransport::new([SEND_OK, malformed, STATEMENT]);
+    let client = FlexClient::new(&transport).with_retry(2, Duration::ZERO);
+
+    let result = client.fetch_statement("my-token", "Q789").await;
+
+    assert!(matches!(result, Err(FlexError::Parse(_))), "{result:?}");
+    assert_eq!(transport.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn get_error_stops_polling_and_redacts_echoed_token() {
+    let denied = r#"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1015</ErrorCode><ErrorMessage>Statement generation in progress is unavailable for token SECRET_TOKEN.</ErrorMessage></FlexStatementResponse>"#;
+    let transport = FakeTransport::new([SEND_OK, denied, STATEMENT]);
+    let client = FlexClient::new(&transport).with_retry(3, Duration::ZERO);
+
+    let result = client.fetch_statement("SECRET_TOKEN", "Q789").await;
+
+    assert_eq!(
+        result,
+        Err(FlexError::Api(
+            "GetStatement error 1015: Statement generation in progress is unavailable for token [redacted]."
+                .into()
+        ))
+    );
+    assert_eq!(transport.calls().len(), 2);
 }

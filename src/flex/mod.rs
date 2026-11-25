@@ -67,7 +67,7 @@ impl<T: HttpGet> FlexClient<T> {
         self
     }
 
-    /// Override the polling policy.
+    /// Override the number of GetStatement attempts and the delay before each attempt.
     pub fn with_retry(mut self, max_retries: u32, retry_delay: Duration) -> Self {
         self.max_retries = max_retries;
         self.retry_delay = retry_delay;
@@ -80,11 +80,18 @@ impl<T: HttpGet> FlexClient<T> {
         token: &str,
         query_id: &str,
     ) -> Result<FlexStatement, FlexError> {
-        let reference_code = self.send_request(token, query_id).await?;
+        let reference_code = self
+            .send_request(token, query_id)
+            .await
+            .map_err(|err| err.redact_token(token))?;
 
         for _ in 0..self.max_retries {
             tokio::time::sleep(self.retry_delay).await;
-            match self.get_statement(token, &reference_code).await? {
+            match self
+                .get_statement(token, &reference_code)
+                .await
+                .map_err(|err| err.redact_token(token))?
+            {
                 GetOutcome::Statement(raw_xml) => {
                     return Ok(FlexStatement {
                         query_id: query_id.to_string(),
@@ -124,6 +131,6 @@ impl<T: HttpGet> FlexClient<T> {
             )
             .await
             .map_err(|e| FlexError::Transport(e.to_string()))?;
-        classify_get_response(&body)
+        classify_get_response(body)
     }
 }

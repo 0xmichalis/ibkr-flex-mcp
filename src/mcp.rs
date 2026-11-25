@@ -285,6 +285,19 @@ mod tests {
     }
 
     #[test]
+    fn truncated_positions_report_returns_a_tool_error_without_partial_rows() {
+        let xml = r#"<FlexQueryResponse><OpenPositions><OpenPosition symbol="AAPL"/>"#;
+
+        let result = positions_to_result(Ok(statement(xml)));
+
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.structured_content, None);
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("no complete root"), "json: {json}");
+        assert!(!json.contains("AAPL"), "json: {json}");
+    }
+
+    #[test]
     fn fetch_error_maps_to_tool_error() {
         let result = positions_to_result(Err(FlexError::NotReady(2)));
         assert_eq!(result.is_error, Some(true));
