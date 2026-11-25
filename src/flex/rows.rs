@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::utils::is_whitespace;
 
 use super::FlexError;
 
@@ -33,10 +34,13 @@ pub fn parse_rows<T>(
     row_from: impl Fn(&Attrs) -> T,
 ) -> Result<Vec<T>, FlexError> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // Leave leading whitespace visible so the XML declaration must be the first event.
+    reader.config_mut().check_comments = true;
     let mut rows = Vec::new();
     let mut depth = 0;
     let mut seen_root = false;
+    let mut seen_doctype = false;
+    let mut at_document_start = true;
 
     // Each event consumes input; quick-xml checks matching end tags but permits EOF with open tags.
     loop {
@@ -55,12 +59,30 @@ pub fn parse_rows<T>(
                 }
                 if e.name().as_ref() == tag.as_bytes() {
                     rows.push(row_from(&attrs_of(&e, tag)?));
+                } else {
+                    e.attributes()
+                        .try_for_each(|attr| attr.map(drop))
+                        .map_err(|err| FlexError::Parse(format!("{tag} attribute: {err}")))?;
                 }
             }
             Event::End(_) => {
                 debug_assert!(depth > 0, "reader must reject unmatched end tags");
                 depth -= 1;
             }
+            Event::Decl(_) if !at_document_start => {
+                return Err(FlexError::Parse(format!(
+                    "{tag} XML: declaration must be at the start of the document"
+                )));
+            }
+            Event::DocType(_) => {
+                if seen_doctype || seen_root {
+                    return Err(FlexError::Parse(format!(
+                        "{tag} XML: only one DOCTYPE is allowed, before the root"
+                    )));
+                }
+                seen_doctype = true;
+            }
+            Event::Text(text) if depth == 0 && text.iter().copied().all(is_whitespace) => {}
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) if depth == 0 => {
                 return Err(FlexError::Parse(format!("{tag} XML: text outside root")));
             }
@@ -70,6 +92,7 @@ pub fn parse_rows<T>(
             }
             _ => {}
         }
+        at_document_start = false;
     }
 }
 
@@ -78,8 +101,7 @@ fn attrs_of(e: &BytesStart<'_>, tag: &str) -> Result<Attrs, FlexError> {
     for attr in e.attributes() {
         let attr = attr.map_err(|err| FlexError::Parse(format!("{tag} attribute: {err}")))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        // Flex statements are XML 1.0; we do not read the declaration, so assume it.
-        // 1.1 would only add a few more characters to newline normalization.
+        // Flex statements use XML 1.0 attribute value normalization.
         let value = attr
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|err| FlexError::Parse(format!("{tag} attribute value: {err}")))?
@@ -131,8 +153,65 @@ mod tests {
     }
 
     #[test]
-    fn document_may_include_prolog_and_trailing_whitespace() {
-        let xml = "\u{feff}<?xml version=\"1.0\"?>\n<!-- report --><Root><Trade/></Root>\n";
+    fn rejects_malformed_trailing_comments() {
+        for xml in [
+            "<Root><Trade/></Root><!-- bad--comment -->",
+            "<Root><Trade/></Root><!-- unterminated",
+        ] {
+            let result = parse_rows(xml, "Trade", |_| ());
+            assert!(
+                matches!(result, Err(FlexError::Parse(_))),
+                "{xml}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_attribute_errors_on_nonmatching_elements() {
+        for xml in [
+            r#"<Root broken><Trade symbol="AAPL"/></Root>"#,
+            r#"<Root><Trade/><Other source=unquoted/></Root>"#,
+            r#"<Root><Trade/><Other source="one" source="two"/></Root>"#,
+        ] {
+            let result = parse_rows(xml, "Trade", |_| ());
+            assert!(
+                matches!(result, Err(FlexError::Parse(_))),
+                "{xml}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_misplaced_or_duplicate_declarations_and_doctypes() {
+        for xml in [
+            "<Root><Trade/></Root><?xml version='1.0'?>",
+            "<Root><?xml version='1.0'?><Trade/></Root>",
+            "\n<?xml version='1.0'?><Root/>",
+            "<!-- report --><?xml version='1.0'?><Root/>",
+            "<?xml version='1.0'?><?xml version='1.0'?><Root/>",
+            "<!DOCTYPE Root><?xml version='1.0'?><Root/>",
+            "<!DOCTYPE Root><!DOCTYPE Root><Root/>",
+            "<Root><!DOCTYPE Root><Trade/></Root>",
+            "<Root/><!DOCTYPE Root>",
+        ] {
+            let result = parse_rows(xml, "Trade", |_| ());
+            assert!(
+                matches!(result, Err(FlexError::Parse(_))),
+                "{xml}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn document_may_include_a_prolog_and_trailing_miscellany() {
+        let xml = concat!(
+            "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<!-- report --><?export ready?><!DOCTYPE Root>\n",
+            "<Root source='IBKR'><Trade/></Root>\r\n<!-- end-of-report --><?trace done?>\t",
+        );
         assert_eq!(parse_rows(xml, "Trade", |_| ()).unwrap(), vec![()]);
+
+        let empty_xml = "\n<!-- report --><!DOCTYPE Root><Root />\n";
+        assert!(parse_rows(empty_xml, "Trade", |_| ()).unwrap().is_empty());
     }
 }
