@@ -101,6 +101,21 @@ async fn gives_up_after_max_retries_when_never_ready() {
 }
 
 #[tokio::test]
+async fn rejects_second_root_in_poll_response_without_retrying() {
+    let malformed = concat!(
+        "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>",
+        "<!-- trailing metadata --><Unexpected/>",
+    );
+    let transport = FakeTransport::new([SEND_OK, malformed, STATEMENT]);
+    let client = FlexClient::new(&transport).with_retry(2, Duration::ZERO);
+
+    let result = client.fetch_statement("my-token", "Q789").await;
+
+    assert!(matches!(result, Err(FlexError::Parse(_))), "{result:?}");
+    assert_eq!(transport.calls().len(), 2);
+}
+
+#[tokio::test]
 async fn get_error_stops_polling_and_redacts_echoed_token() {
     let denied = r#"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1015</ErrorCode><ErrorMessage>Statement generation in progress is unavailable for token SECRET_TOKEN.</ErrorMessage></FlexStatementResponse>"#;
     let transport = FakeTransport::new([SEND_OK, denied, STATEMENT]);

@@ -3,12 +3,13 @@
 //! XML is parsed with `quick-xml`, a pull parser that performs **no DTD or entity expansion**,
 //! so XXE and entity-expansion ("billion laughs") attacks are absent by construction.
 
-use quick_xml::{Reader, events::Event};
+use quick_xml::{Reader, events::Event, name::QName};
 use serde::Deserialize;
 use thiserror::Error;
 
 /// The Flex v3 error code for a statement that is still being generated.
 const IN_PROGRESS_CODE: &str = "1019";
+const CONTROL_ROOT: &[u8] = b"FlexStatementResponse";
 
 /// Errors surfaced by the Flex client.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -66,14 +67,14 @@ pub enum GetOutcome {
 
 /// Parse a SendRequest response and return the reference code used to poll for the statement.
 pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
-    if !matches!(response_root(xml), Some(ResponseRoot::Control)) {
+    let mut reader = Reader::from_str(xml);
+    let Some(ResponseRoot::Control { open }) = response_root(&mut reader) else {
         return Err(FlexError::Parse(
             "SendRequest expected a FlexStatementResponse XML envelope".into(),
         ));
-    }
+    };
 
-    let resp: ControlResponse = quick_xml::de::from_str(xml)
-        .map_err(|e| FlexError::Parse(format!("SendRequest response: {e}")))?;
+    let resp = parse_control_response(xml, reader, open, "SendRequest")?;
 
     match resp.status.as_deref() {
         Some("Success") => {}
@@ -94,19 +95,19 @@ pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
 
 /// Classify the response by its XML root. The report body can contain arbitrary field text.
 pub fn classify_get_response(body: String) -> Result<GetOutcome, FlexError> {
-    match response_root(&body) {
+    let mut reader = Reader::from_str(&body);
+    let open = match response_root(&mut reader) {
         Some(ResponseRoot::Statement) => return Ok(GetOutcome::Statement(body)),
-        Some(ResponseRoot::Control) => {}
+        Some(ResponseRoot::Control { open }) => open,
         None => {
             return Err(FlexError::Parse(
                 "GetStatement expected a FlexQueryResponse or FlexStatementResponse XML envelope"
                     .into(),
             ));
         }
-    }
+    };
 
-    let resp: ControlResponse = quick_xml::de::from_str(&body)
-        .map_err(|e| FlexError::Parse(format!("GetStatement response: {e}")))?;
+    let resp = parse_control_response(&body, reader, open, "GetStatement")?;
 
     match (
         resp.status.as_deref(),
@@ -127,18 +128,19 @@ pub fn classify_get_response(body: String) -> Result<GetOutcome, FlexError> {
 }
 
 enum ResponseRoot {
-    Control,
+    Control { open: bool },
     Statement,
 }
 
-fn response_root(xml: &str) -> Option<ResponseRoot> {
-    let mut reader = Reader::from_str(xml);
+fn response_root(reader: &mut Reader<&[u8]>) -> Option<ResponseRoot> {
     reader.config_mut().trim_text(true);
     loop {
-        match reader.read_event().ok()? {
+        let event = reader.read_event().ok()?;
+        let open = matches!(event, Event::Start(_));
+        match event {
             Event::Start(root) | Event::Empty(root) => {
                 return match root.name().as_ref() {
-                    b"FlexStatementResponse" => Some(ResponseRoot::Control),
+                    CONTROL_ROOT => Some(ResponseRoot::Control { open }),
                     b"FlexQueryResponse" => Some(ResponseRoot::Statement),
                     _ => None,
                 };
@@ -149,6 +151,57 @@ fn response_root(xml: &str) -> Option<ResponseRoot> {
     }
 }
 
+fn parse_control_response(
+    xml: &str,
+    mut reader: Reader<&[u8]>,
+    root_open: bool,
+    endpoint: &str,
+) -> Result<ControlResponse, FlexError> {
+    // Serde stops at the first root. Check the rest of the control document before using it.
+    reader.config_mut().check_comments = true;
+    let xml_error = |err| FlexError::Parse(format!("{endpoint} response: {err}"));
+    if root_open {
+        reader.read_to_end(QName(CONTROL_ROOT)).map_err(xml_error)?;
+    }
+
+    loop {
+        match reader.read_event().map_err(xml_error)? {
+            Event::Comment(comment) if valid_xml_chars(&comment) => {}
+            Event::PI(pi) if valid_pi_target(pi.target()) && valid_xml_chars(pi.content()) => {}
+            Event::Eof => break,
+            _ => {
+                return Err(FlexError::Parse(format!(
+                    "{endpoint} response has unexpected content after the control envelope"
+                )));
+            }
+        }
+    }
+
+    quick_xml::de::from_str(xml)
+        .map_err(|err| FlexError::Parse(format!("{endpoint} response: {err}")))
+}
+
+fn valid_pi_target(target: &[u8]) -> bool {
+    let Ok(target) = str::from_utf8(target) else {
+        return false;
+    };
+    // The serializer exposes quick-xml's XML name check without writing any output.
+    !target.is_empty()
+        && !target.eq_ignore_ascii_case("xml")
+        && quick_xml::se::Serializer::with_root(&mut String::new(), Some(target)).is_ok()
+}
+
+fn valid_xml_chars(text: &[u8]) -> bool {
+    str::from_utf8(text).is_ok_and(|text| {
+        text.chars().all(|ch| {
+            matches!(
+                ch,
+                '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+            )
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
@@ -156,6 +209,7 @@ mod tests {
     use super::*;
 
     const SEND_SUCCESS: &str = r#"<FlexStatementResponse timestamp="2026-06-09"><Status>Success</Status><ReferenceCode>REF123</ReferenceCode><Url>https://gdcdyn.interactivebrokers.com/x/GetStatement</Url></FlexStatementResponse>"#;
+    const GET_IN_PROGRESS: &str = "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>";
 
     #[test]
     fn send_success_yields_reference_code() {
@@ -190,11 +244,50 @@ mod tests {
 
     #[test]
     fn get_in_progress_is_detected() {
-        let xml = "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>";
         assert_eq!(
-            classify_get_response(xml.into()).unwrap(),
+            classify_get_response(GET_IN_PROGRESS.into()).unwrap(),
             GetOutcome::InProgress
         );
+    }
+
+    #[test]
+    fn control_responses_allow_trailing_whitespace_comments_and_processing_instructions() {
+        let tail = " \t\r\n<!-- sent by gateway -->\n<?état complete?>\n";
+        assert_eq!(
+            parse_send_response(&format!("{SEND_SUCCESS}{tail}")).unwrap(),
+            "REF123"
+        );
+        assert_eq!(
+            classify_get_response(format!("{GET_IN_PROGRESS}{tail}")).unwrap(),
+            GetOutcome::InProgress
+        );
+    }
+
+    #[test]
+    fn control_responses_reject_malformed_trailing_content() {
+        for tail in [
+            "<!-- metadata --><Unexpected/>",
+            "<Unexpected></Unexpected>",
+            "trailing text",
+            "<!-- unterminated",
+            "<!-- invalid -- comment -->",
+            "<!-- invalid \0 character -->",
+            "<!DOCTYPE FlexStatementResponse>",
+            "<?xml version=\"1.0\"?>",
+            "<?XML?>",
+            "<?1trace?>",
+            "<??>",
+            "<?trace \u{ffff}?>",
+        ] {
+            assert_matches!(
+                parse_send_response(&format!("{SEND_SUCCESS}{tail}")),
+                Err(FlexError::Parse(_))
+            );
+            assert_matches!(
+                classify_get_response(format!("{GET_IN_PROGRESS}{tail}")),
+                Err(FlexError::Parse(_))
+            );
+        }
     }
 
     #[test]
