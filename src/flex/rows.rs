@@ -33,20 +33,44 @@ pub fn parse_rows<T>(
     row_from: impl Fn(&Attrs) -> T,
 ) -> Result<Vec<T>, FlexError> {
     let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
     let mut rows = Vec::new();
+    let mut depth = 0;
+    let mut seen_root = false;
 
+    // Each event consumes input; quick-xml checks matching end tags but permits EOF with open tags.
     loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == tag.as_bytes() => {
-                rows.push(row_from(&attrs_of(&e, tag)?));
+        let event = reader
+            .read_event()
+            .map_err(|err| FlexError::Parse(format!("{tag} XML: {err}")))?;
+        let opens_element = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                if depth == 0 && seen_root {
+                    return Err(FlexError::Parse(format!("{tag} XML: multiple roots")));
+                }
+                seen_root = true;
+                if opens_element {
+                    depth += 1;
+                }
+                if e.name().as_ref() == tag.as_bytes() {
+                    rows.push(row_from(&attrs_of(&e, tag)?));
+                }
             }
-            Err(e) => return Err(FlexError::Parse(format!("{tag} XML: {e}"))),
+            Event::End(_) => {
+                debug_assert!(depth > 0, "reader must reject unmatched end tags");
+                depth -= 1;
+            }
+            Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) if depth == 0 => {
+                return Err(FlexError::Parse(format!("{tag} XML: text outside root")));
+            }
+            Event::Eof if seen_root && depth == 0 => return Ok(rows),
+            Event::Eof => {
+                return Err(FlexError::Parse(format!("{tag} XML: no complete root")));
+            }
             _ => {}
         }
     }
-
-    Ok(rows)
 }
 
 fn attrs_of(e: &BytesStart<'_>, tag: &str) -> Result<Attrs, FlexError> {
@@ -94,7 +118,21 @@ mod tests {
 
     #[test]
     fn malformed_xml_is_a_parse_error() {
-        let err = parse_rows("<Root><Trade symbol=", "Trade", |_| ()).unwrap_err();
-        assert_matches!(err, FlexError::Parse(_));
+        for xml in [
+            "<Root><Trade symbol=",
+            "<Root><Trade symbol=\"AAPL\"/>",
+            "<Root><Trade/></Other>",
+            "<Root><Trade/></Root><Root/>",
+            "<Root><Trade/></Root>trailing text",
+            "\n<!-- no root -->\n",
+        ] {
+            assert_matches!(parse_rows(xml, "Trade", |_| ()), Err(FlexError::Parse(_)));
+        }
+    }
+
+    #[test]
+    fn document_may_include_prolog_and_trailing_whitespace() {
+        let xml = "\u{feff}<?xml version=\"1.0\"?>\n<!-- report --><Root><Trade/></Root>\n";
+        assert_eq!(parse_rows(xml, "Trade", |_| ()).unwrap(), vec![()]);
     }
 }

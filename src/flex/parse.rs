@@ -3,11 +3,12 @@
 //! XML is parsed with `quick-xml`, a pull parser that performs **no DTD or entity expansion**,
 //! so XXE and entity-expansion ("billion laughs") attacks are absent by construction.
 
+use quick_xml::{Reader, events::Event};
 use serde::Deserialize;
 use thiserror::Error;
 
-/// The marker IBKR returns from GetStatement while a statement is still being generated.
-const IN_PROGRESS_MARKER: &str = "Statement generation in progress";
+/// The Flex v3 error code for a statement that is still being generated.
+const IN_PROGRESS_CODE: &str = "1019";
 
 /// Errors surfaced by the Flex client.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -24,6 +25,20 @@ pub enum FlexError {
     /// The underlying HTTP transport failed.
     #[error("transport error: {0}")]
     Transport(String),
+}
+
+impl FlexError {
+    pub(super) fn redact_token(mut self, token: &str) -> Self {
+        let message = match &mut self {
+            Self::Api(message) | Self::Parse(message) | Self::Transport(message) => message,
+            Self::NotReady(_) => return self,
+        };
+        // A remote error or an injected transport may echo the token from the request.
+        if !token.is_empty() && message.contains(token) {
+            *message = message.replace(token, "[redacted]");
+        }
+        self
+    }
 }
 
 /// A Flex Web Service control response (`<FlexStatementResponse>`): the envelope returned by
@@ -51,6 +66,12 @@ pub enum GetOutcome {
 
 /// Parse a SendRequest response and return the reference code used to poll for the statement.
 pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
+    if !matches!(response_root(xml), Some(ResponseRoot::Control)) {
+        return Err(FlexError::Parse(
+            "SendRequest expected a FlexStatementResponse XML envelope".into(),
+        ));
+    }
+
     let resp: ControlResponse = quick_xml::de::from_str(xml)
         .map_err(|e| FlexError::Parse(format!("SendRequest response: {e}")))?;
 
@@ -67,31 +88,65 @@ pub fn parse_send_response(xml: &str) -> Result<String, FlexError> {
     }
 
     resp.reference_code
-        .filter(|c| !c.is_empty())
+        .filter(|code| !code.trim().is_empty())
         .ok_or_else(|| FlexError::Parse("no reference code in response".into()))
 }
 
-/// Classify a GetStatement response body: still generating, an error, or the actual statement.
-///
-/// The real statement is a `<FlexQueryResponse>` document; we treat anything that is not an
-/// in-progress marker or a recognised error envelope as the statement payload.
-pub fn classify_get_response(body: &str) -> Result<GetOutcome, FlexError> {
-    if body.contains(IN_PROGRESS_MARKER) {
-        return Ok(GetOutcome::InProgress);
+/// Classify the response by its XML root. The report body can contain arbitrary field text.
+pub fn classify_get_response(body: String) -> Result<GetOutcome, FlexError> {
+    match response_root(&body) {
+        Some(ResponseRoot::Statement) => return Ok(GetOutcome::Statement(body)),
+        Some(ResponseRoot::Control) => {}
+        None => {
+            return Err(FlexError::Parse(
+                "GetStatement expected a FlexQueryResponse or FlexStatementResponse XML envelope"
+                    .into(),
+            ));
+        }
     }
 
-    // A control envelope carrying an error code (e.g. expired token, invalid reference code).
-    if let Ok(resp) = quick_xml::de::from_str::<ControlResponse>(body)
-        && resp.status.as_deref() != Some("Success")
-        && let Some(code) = resp.error_code
-    {
-        return Err(FlexError::Api(format!(
+    let resp: ControlResponse = quick_xml::de::from_str(&body)
+        .map_err(|e| FlexError::Parse(format!("GetStatement response: {e}")))?;
+
+    match (
+        resp.status.as_deref(),
+        resp.error_code.as_deref().map(str::trim),
+    ) {
+        (Some("Success"), _) => Err(FlexError::Parse(
+            "GetStatement returned a success status without a statement".into(),
+        )),
+        (_, None | Some("")) => Err(FlexError::Parse(
+            "GetStatement control response is missing an error code".into(),
+        )),
+        (_, Some(IN_PROGRESS_CODE)) => Ok(GetOutcome::InProgress),
+        (_, Some(code)) => Err(FlexError::Api(format!(
             "GetStatement error {code}: {}",
             resp.error_message.unwrap_or_default()
-        )));
+        ))),
     }
+}
 
-    Ok(GetOutcome::Statement(body.to_string()))
+enum ResponseRoot {
+    Control,
+    Statement,
+}
+
+fn response_root(xml: &str) -> Option<ResponseRoot> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    loop {
+        match reader.read_event().ok()? {
+            Event::Start(root) | Event::Empty(root) => {
+                return match root.name().as_ref() {
+                    b"FlexStatementResponse" => Some(ResponseRoot::Control),
+                    b"FlexQueryResponse" => Some(ResponseRoot::Statement),
+                    _ => None,
+                };
+            }
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_) => {}
+            _ => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -118,21 +173,35 @@ mod tests {
 
     #[test]
     fn send_success_without_reference_code_is_parse_error() {
-        let xml = r#"<FlexStatementResponse><Status>Success</Status></FlexStatementResponse>"#;
+        for xml in [
+            "<FlexStatementResponse><Status>Success</Status></FlexStatementResponse>",
+            "<FlexStatementResponse><Status>Success</Status><ReferenceCode> </ReferenceCode></FlexStatementResponse>",
+        ] {
+            assert_matches!(parse_send_response(xml).unwrap_err(), FlexError::Parse(_));
+        }
+    }
+
+    #[test]
+    fn send_requires_the_control_envelope() {
+        let xml =
+            "<WrongRoot><Status>Success</Status><ReferenceCode>REF123</ReferenceCode></WrongRoot>";
         assert_matches!(parse_send_response(xml).unwrap_err(), FlexError::Parse(_));
     }
 
     #[test]
     fn get_in_progress_is_detected() {
-        let xml = r#"<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode><ErrorMessage>Statement generation in progress. Try again shortly.</ErrorMessage></FlexStatementResponse>"#;
-        assert_eq!(classify_get_response(xml).unwrap(), GetOutcome::InProgress);
+        let xml = "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode></FlexStatementResponse>";
+        assert_eq!(
+            classify_get_response(xml.into()).unwrap(),
+            GetOutcome::InProgress
+        );
     }
 
     #[test]
     fn get_statement_payload_is_returned_verbatim() {
-        let xml = r#"<FlexQueryResponse queryName="Activity" type="AF"><FlexStatements count="1"><FlexStatement accountId="U1234567"><OpenPositions/></FlexStatement></FlexStatements></FlexQueryResponse>"#;
+        let xml = "\u{feff}<?xml version=\"1.0\"?>\n<!-- export -->\n<FlexQueryResponse queryName=\"Statement generation in progress\"><FlexStatements count=\"0\"/></FlexQueryResponse>";
         assert_eq!(
-            classify_get_response(xml).unwrap(),
+            classify_get_response(xml.into()).unwrap(),
             GetOutcome::Statement(xml.to_string())
         );
     }
@@ -140,8 +209,23 @@ mod tests {
     #[test]
     fn get_error_envelope_surfaces_api_error() {
         let xml = r#"<FlexStatementResponse><Status>Fail</Status><ErrorCode>1003</ErrorCode><ErrorMessage>Statement could not be generated</ErrorMessage></FlexStatementResponse>"#;
-        let err = classify_get_response(xml).unwrap_err();
+        let err = classify_get_response(xml.into()).unwrap_err();
         assert_matches!(err, FlexError::Api(_));
         assert!(err.to_string().contains("1003"));
+    }
+
+    #[test]
+    fn unexpected_or_malformed_get_response_does_not_complete_the_poll() {
+        for xml in [
+            "<html><body>Unexpected gateway response</body></html>",
+            "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode>",
+            "<FlexStatementResponse><Status>Fail</Status></FlexStatementResponse>",
+            "<FlexStatementResponse><Status>Success</Status></FlexStatementResponse>",
+        ] {
+            assert_matches!(
+                classify_get_response(xml.into()).unwrap_err(),
+                FlexError::Parse(_)
+            );
+        }
     }
 }
